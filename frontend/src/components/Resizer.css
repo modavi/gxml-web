@@ -1,9 +1,9 @@
 .resizer {
-  width: 4px;
+  width: 3px;
   background-color: var(--border-color);
   cursor: col-resize;
   flex-shrink: 0;
-  transition: background-color 0.15s;
+  transition: background-color 0.1s;
   position: relative;
 }
 
@@ -11,8 +11,8 @@
   content: '';
   position: absolute;
   top: 0;
-  left: -3px;
-  right: -3px;
+  left: -4px;
+  right: -4px;
   bottom: 0;
 }
 

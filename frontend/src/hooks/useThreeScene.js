@@ -3,6 +3,7 @@ import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer'
 import { useViewportStore } from '../stores/viewportStore'
+import { useAppStore } from '../stores/appStore'
 
 export function useThreeScene(containerRef, geometryData) {
   const sceneRef = useRef(null)
@@ -19,26 +20,40 @@ export function useThreeScene(containerRef, geometryData) {
   const hoveredMeshRef = useRef(null)
   const hoveredVertexRef = useRef(null)
   const settingsRef = useRef({ showFaceLabels: false, hideOccludedLabels: true })
-  const selectionRef = useRef({ selectedFaceId: null, selectedVertexIdx: null })
-  const hoverRef = useRef({ hoveredFaceId: null, hoveredVertexIdx: null })
+  const selectionRef = useRef({ selectedFaceId: null, selectedVertexIdx: null, selectedElementId: null })
+  const hoverRef = useRef({ hoveredFaceId: null, hoveredVertexIdx: null, hoveredElementId: null })
+  
+  // Creation mode refs
+  const previewMeshRef = useRef(null)
+  const previewPointsRef = useRef([])  // Visual markers for placed points
+  const xyPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0))  // XY plane at z=0
 
   const {
     viewMode,
     colorMode,
     showFaceLabels,
     hideOccludedLabels,
-    showVertices,
+    selectionMode,
+    vertexScale,
     enableInertia,
+    selectedElementId,
     selectedFaceId,
     selectedVertexIdx,
+    setSelectedElement,
     setSelectedFace,
     setSelectedVertex,
+    hoveredElementId,
     hoveredFaceId,
     hoveredVertexIdx,
+    setHoveredElement,
     setHoveredFace,
     setHoveredVertex,
     clearHover,
   } = useViewportStore()
+  
+  // Get creation mode state
+  const creationMode = useViewportStore((state) => state.creationMode)
+  const panelChain = useViewportStore((state) => state.panelChain)
 
   // Keep settings ref in sync
   useEffect(() => {
@@ -53,6 +68,39 @@ export function useThreeScene(containerRef, geometryData) {
       })
     }
   }, [showFaceLabels, hideOccludedLabels])
+  
+  // Clean up preview markers when chain changes or creation mode is disabled
+  useEffect(() => {
+    const scene = sceneRef.current
+    if (!scene) return
+    
+    // If creation mode is off or chain is empty, clear preview markers
+    if (!creationMode || panelChain.length === 0) {
+      // Remove preview mesh
+      if (previewMeshRef.current) {
+        scene.remove(previewMeshRef.current)
+        previewMeshRef.current.geometry?.dispose()
+        previewMeshRef.current.material?.dispose()
+        previewMeshRef.current = null
+      }
+      
+      // Remove point markers
+      previewPointsRef.current.forEach(marker => {
+        scene.remove(marker)
+        marker.geometry?.dispose()
+        marker.material?.dispose()
+      })
+      previewPointsRef.current = []
+    }
+    
+    // When chain shrinks (undo), remove extra markers
+    while (previewPointsRef.current.length > panelChain.length) {
+      const marker = previewPointsRef.current.pop()
+      scene.remove(marker)
+      marker.geometry?.dispose()
+      marker.material?.dispose()
+    }
+  }, [creationMode, panelChain.length])
 
   // Initialize scene
   useEffect(() => {
@@ -62,9 +110,9 @@ export function useThreeScene(containerRef, geometryData) {
     const width = container.clientWidth
     const height = container.clientHeight
 
-    // Scene
+    // Scene - Blender-style dark gray background
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x1a1a2e)
+    scene.background = new THREE.Color(0x282828)
     sceneRef.current = scene
 
     // Camera
@@ -98,12 +146,12 @@ export function useThreeScene(containerRef, geometryData) {
     backLight.position.set(-500, -200, -500)
     scene.add(backLight)
 
-    // Grid
-    const gridHelper = new THREE.GridHelper(4, 20, 0x444444, 0x333333)
+    // Grid - Blender style subtle grid
+    const gridHelper = new THREE.GridHelper(4, 20, 0x3d3d3d, 0x303030)
     scene.add(gridHelper)
 
-    // Axes
-    const axesHelper = new THREE.AxesHelper(0.5)
+    // Axes - smaller, Blender-style
+    const axesHelper = new THREE.AxesHelper(0.4)
     scene.add(axesHelper)
 
     // Groups
@@ -199,43 +247,295 @@ export function useThreeScene(containerRef, geometryData) {
       mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
       mouseRef.current.y = -((e.clientY - rect.top) / rect.height) * 2 + 1
       
-      updateHover()
+      const viewportStore = useViewportStore.getState()
+      
+      // In creation mode, update preview panel
+      if (viewportStore.creationMode) {
+        updateCreationPreview()
+      } else {
+        updateHover()
+      }
     }
     
     const handleMouseLeave = () => {
       resetHover()
+      // Hide preview when mouse leaves
+      if (previewMeshRef.current) {
+        previewMeshRef.current.visible = false
+      }
     }
     
-    // Click handler for selection
+    // Track if user is dragging (rotating/panning) vs clicking
+    let isDragging = false
+    let mouseDownPos = { x: 0, y: 0 }
+    
+    const handleMouseDown = (e) => {
+      isDragging = false
+      mouseDownPos = { x: e.clientX, y: e.clientY }
+    }
+    
+    const handleMouseMoveForDrag = (e) => {
+      const dx = e.clientX - mouseDownPos.x
+      const dy = e.clientY - mouseDownPos.y
+      if (Math.abs(dx) > 3 || Math.abs(dy) > 3) {
+        isDragging = true
+      }
+    }
+    
+    // Helper: Raycast to XY plane (for wall/vertical interactions)
+    const raycastToXYPlane = () => {
+      const raycaster = raycasterRef.current
+      const mouse = mouseRef.current
+      const camera = cameraRef.current
+      
+      raycaster.setFromCamera(mouse, camera)
+      
+      const intersectPoint = new THREE.Vector3()
+      const ray = raycaster.ray
+      
+      // Intersect with XY plane (z=0)
+      if (ray.intersectPlane(xyPlaneRef.current, intersectPoint)) {
+        return intersectPoint
+      }
+      return null
+    }
+    
+    // Helper: Raycast to XZ plane (floor plane, y=0) for creation mode
+    const raycastToXZPlane = () => {
+      const raycaster = raycasterRef.current
+      const mouse = mouseRef.current
+      const camera = cameraRef.current
+      
+      raycaster.setFromCamera(mouse, camera)
+      
+      const intersectPoint = new THREE.Vector3()
+      const ray = raycaster.ray
+      
+      // Intersect with XZ plane (y=0) - the floor
+      const xzPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0)
+      if (ray.intersectPlane(xzPlane, intersectPoint)) {
+        return intersectPoint
+      }
+      return null
+    }
+    
+    // Helper: Get the endpoint of a panel by index from geometry data
+    const getSelectedPanelEndpoint = () => {
+      const appStore = useAppStore.getState()
+      const viewportStore = useViewportStore.getState()
+      const geometryData = appStore.geometryData
+      const selectedId = viewportStore.selectedElementId
+      
+      if (!geometryData?.panels || selectedId === null || selectedId === undefined) {
+        return null
+      }
+      
+      // Find the first panel face that matches this panel index
+      // Panel IDs are like "0-front", "0-back", "1-None", etc.
+      // We need to find any panel starting with "{selectedId}-"
+      const panelPrefix = `${selectedId}-`
+      const panel = geometryData.panels.find(p => p.id && p.id.startsWith(panelPrefix))
+      
+      if (!panel?.endPoint) {
+        return null
+      }
+      
+      // Calculate the panel's world rotation from its start and end points
+      // This gives us the cumulative rotation to pass to child panels
+      let worldRotation = 0
+      if (panel.startPoint && panel.endPoint) {
+        const dx = panel.endPoint[0] - panel.startPoint[0]
+        const dz = panel.endPoint[2] - panel.startPoint[2]
+        worldRotation = -Math.atan2(dz, dx) * (180 / Math.PI)
+      }
+      
+      return {
+        x: panel.endPoint[0],
+        y: panel.endPoint[1],
+        z: panel.endPoint[2] || 0,
+        panelIndex: selectedId,
+        worldRotation: worldRotation
+      }
+    }
+    
+    // Helper: Create or update preview panel (emerges from selected panel endpoint)
+    const updateCreationPreview = () => {
+      const viewportStore = useViewportStore.getState()
+      const endpoint = getSelectedPanelEndpoint()
+      
+      // Must have a selected panel to create from
+      if (!endpoint) {
+        if (previewMeshRef.current) previewMeshRef.current.visible = false
+        return
+      }
+      
+      // Use XZ plane (floor) for creation - panels rotate around Y axis
+      const mousePoint = raycastToXZPlane()
+      if (!mousePoint) {
+        if (previewMeshRef.current) previewMeshRef.current.visible = false
+        return
+      }
+      
+      // Calculate in XZ plane (horizontal floor)
+      const dx = mousePoint.x - endpoint.x
+      const dz = mousePoint.z - endpoint.z
+      const width = Math.sqrt(dx * dx + dz * dz)
+      
+      // Don't show preview for very short panels
+      if (width < 0.05) {
+        if (previewMeshRef.current) previewMeshRef.current.visible = false
+        return
+      }
+      
+      // Angle in XZ plane - atan2(dz, dx) for rotation around Y
+      const angle = Math.atan2(dz, dx)
+      
+      // Position the panel center offset from the endpoint (pivot point)
+      // Panel swings around the endpoint like a hinged door
+      // Center is at endpoint + half-width in the direction of the panel
+      const cx = endpoint.x + (width / 2) * Math.cos(angle)
+      const cz = endpoint.z + (width / 2) * Math.sin(angle)
+      
+      // Create preview mesh if it doesn't exist
+      if (!previewMeshRef.current) {
+        // BoxGeometry(width, height, depth)
+        // X = panel length (will be scaled)
+        // Y = panel height (1 unit tall)
+        // Z = panel thickness
+        const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
+        const previewMat = new THREE.MeshBasicMaterial({
+          color: 0xed5700,
+          transparent: true,
+          opacity: 0.5,
+          wireframe: false
+        })
+        previewMeshRef.current = new THREE.Mesh(previewGeo, previewMat)
+        scene.add(previewMeshRef.current)
+      }
+      
+      // Update preview mesh
+      previewMeshRef.current.scale.set(width, 1, 1)
+      // Position centered on the endpoint (which is already at mid-height)
+      previewMeshRef.current.position.set(cx, endpoint.y, cz)
+      
+      // Rotate around Y axis - panel swings in XZ plane
+      // Negate because Three.js Y rotation is counterclockwise when looking down
+      previewMeshRef.current.rotation.set(0, -angle, 0)
+      previewMeshRef.current.visible = true
+      
+      // Show a marker at the endpoint we're building from
+      if (previewPointsRef.current.length === 0) {
+        const markerGeo = new THREE.SphereGeometry(0.05, 16, 16)
+        const markerMat = new THREE.MeshBasicMaterial({ color: 0xed5700 })
+        const marker = new THREE.Mesh(markerGeo, markerMat)
+        marker.position.set(endpoint.x, endpoint.y, endpoint.z)
+        scene.add(marker)
+        previewPointsRef.current.push(marker)
+      } else {
+        // Update marker position in case selection changed
+        previewPointsRef.current[0].position.set(endpoint.x, endpoint.y, endpoint.z)
+      }
+    }
+    
+    // Click handler for selection OR creation
     const handleClick = (e) => {
       // Don't select on alt+click (panning)
       if (e.altKey) return
       
-      const store = useViewportStore.getState()
+      // Don't select if user was dragging (rotating/panning)
+      if (isDragging) return
       
-      // Check if we have a hovered vertex first
-      if (hoveredVertexRef.current) {
-        const vertexIdx = hoveredVertexRef.current.userData.vertexIndex
-        if (vertexIdx !== undefined) {
-          store.setSelectedVertex(vertexIdx)
+      const viewportStore = useViewportStore.getState()
+      const appStore = useAppStore.getState()
+      
+      // CREATION MODE - create panel from selected panel's endpoint
+      if (viewportStore.creationMode) {
+        const endpoint = getSelectedPanelEndpoint()
+        
+        if (!endpoint) {
+          console.log('Creation mode: Please select a panel first')
+          return
+        }
+        
+        // Use XZ plane (floor) for creation
+        const clickPoint = raycastToXZPlane()
+        if (!clickPoint) return
+        
+        // Calculate distance in XZ plane
+        const dx = clickPoint.x - endpoint.x
+        const dz = clickPoint.z - endpoint.z
+        const dist = Math.sqrt(dx * dx + dz * dz)
+        
+        if (dist >= 0.05) {
+          // Create the panel, inserted after the selected panel
+          // Start at endpoint, end at click position (use endpoint.y for height)
+          const startPoint = { x: endpoint.x, y: endpoint.y, z: endpoint.z }
+          const endPointCoord = { x: clickPoint.x, y: endpoint.y, z: clickPoint.z }
+          
+          // Pass parent's world rotation so the relative rotation is calculated correctly
+          const success = appStore.addPanelFromPoints(startPoint, endPointCoord, endpoint.panelIndex, 0.25, endpoint.worldRotation)
+          
+          if (success) {
+            // Clear the preview marker so it gets recreated at new position
+            previewPointsRef.current.forEach(m => scene.remove(m))
+            previewPointsRef.current = []
+            
+            // Hide the preview mesh until mouse moves again
+            if (previewMeshRef.current) {
+              previewMeshRef.current.visible = false
+            }
+            
+            // Select the newly created panel (it's at index panelIndex + 1)
+            // Wait for re-render to complete before selecting, then update preview
+            setTimeout(() => {
+              viewportStore.setSelectedElement(endpoint.panelIndex + 1)
+              // Update preview after geometry is ready
+              setTimeout(() => {
+                updateCreationPreview()
+              }, 100)
+            }, 300)
+          }
         }
         return
       }
       
-      // Check if we have a hovered mesh
-      if (hoveredMeshRef.current) {
+      // SELECTION MODE
+      const currentSelectionMode = viewportStore.selectionMode
+      
+      // Point selection mode - check vertices first
+      if (currentSelectionMode === 'point' && hoveredVertexRef.current) {
+        const vertexIdx = hoveredVertexRef.current.userData.vertexIndex
+        if (vertexIdx !== undefined) {
+          viewportStore.setSelectedVertex(vertexIdx)
+        }
+        return
+      }
+      
+      // Face selection mode - select individual face
+      if (currentSelectionMode === 'face' && hoveredMeshRef.current) {
         const faceId = hoveredMeshRef.current.userData.faceId
         if (faceId) {
-          store.setSelectedFace(faceId)
+          viewportStore.setSelectedFace(faceId)
+        }
+        return
+      }
+      
+      // Element selection mode - select entire panel/element
+      if (currentSelectionMode === 'element' && hoveredMeshRef.current) {
+        const panelId = hoveredMeshRef.current.userData.panelId
+        if (panelId !== undefined && panelId !== null) {
+          viewportStore.setSelectedElement(panelId)
         }
         return
       }
       
       // Click on nothing - clear selection
-      store.clearSelection()
+      viewportStore.clearSelection()
     }
     
+    renderer.domElement.addEventListener('mousedown', handleMouseDown)
     renderer.domElement.addEventListener('mousemove', handleMouseMove)
+    renderer.domElement.addEventListener('mousemove', handleMouseMoveForDrag)
     renderer.domElement.addEventListener('mouseleave', handleMouseLeave)
     renderer.domElement.addEventListener('click', handleClick)
 
@@ -292,7 +592,9 @@ export function useThreeScene(containerRef, geometryData) {
     // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize)
+      renderer.domElement.removeEventListener('mousedown', handleMouseDown)
       renderer.domElement.removeEventListener('mousemove', handleMouseMove)
+      renderer.domElement.removeEventListener('mousemove', handleMouseMoveForDrag)
       renderer.domElement.removeEventListener('mouseleave', handleMouseLeave)
       renderer.domElement.removeEventListener('click', handleClick)
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown)
@@ -325,15 +627,17 @@ export function useThreeScene(containerRef, geometryData) {
     const vertexGroup = vertexGroupRef.current
     const renderer = rendererRef.current
     const store = useViewportStore.getState()
-    const showVerts = store.showVertices
+    const currentSelectionMode = store.selectionMode
+    const showVerts = currentSelectionMode === 'point'  // Show vertices in point mode
     const currentSelectedFaceId = store.selectedFaceId
     const currentSelectedVertexIdx = store.selectedVertexIdx
+    const currentSelectedElementId = store.selectedElementId
     
     if (!raycaster || !camera || !geometryGroup || !renderer) return
     
     raycaster.setFromCamera(mouse, camera)
     
-    // Check vertices first
+    // Check vertices first (only in point mode)
     let newHoveredVertex = null
     if (showVerts && vertexGroup) {
       const vertexIntersects = raycaster.intersectObjects(vertexGroup.children, false)
@@ -352,7 +656,7 @@ export function useThreeScene(containerRef, geometryData) {
         }
       }
       if (newHoveredVertex) {
-        newHoveredVertex.material.color.setHex(0xffff00)
+        newHoveredVertex.material.color.setHex(0x6090c0)  // Blender-style blue hover
         // Sync to store for spreadsheet highlighting
         const vertexIdx = newHoveredVertex.userData.vertexIndex
         if (vertexIdx !== undefined) {
@@ -379,31 +683,96 @@ export function useThreeScene(containerRef, geometryData) {
       newHovered = intersects[0].object
     }
     
+    // Helper to apply selection highlight to a mesh
+    const applySelectionHighlight = (mesh) => {
+      const baseColor = mesh.userData.baseColor
+      if (baseColor) {
+        const hsl = {}
+        baseColor.getHSL(hsl)
+        mesh.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.25))
+      }
+      if (mesh.material.emissive) {
+        mesh.material.emissive.setHex(0x3d2000)  // Orange tint for selection
+      }
+    }
+    
+    // Helper to reset mesh to base color
+    const resetToBaseColor = (mesh) => {
+      if (mesh.userData.baseColor) {
+        mesh.material.color.copy(mesh.userData.baseColor)
+        if (mesh.material.emissive) {
+          mesh.material.emissive.setHex(0x000000)
+        }
+      }
+    }
+    
     // Update mesh hover
     if (hoveredMeshRef.current !== newHovered) {
+      // Clear previous hover - need to handle element mode specially
       if (hoveredMeshRef.current?.userData.baseColor) {
-        // Only reset to base color if not selected
+        const prevPanelId = hoveredMeshRef.current.userData.panelId
         const prevFaceId = hoveredMeshRef.current.userData.faceId
-        if (prevFaceId !== currentSelectedFaceId) {
-          hoveredMeshRef.current.material.color.copy(hoveredMeshRef.current.userData.baseColor)
-          if (hoveredMeshRef.current.material.emissive) {
-            hoveredMeshRef.current.material.emissive.setHex(0x000000)
+        
+        if (currentSelectionMode === 'element' && prevPanelId !== undefined && prevPanelId !== null) {
+          // In element mode, reset all faces of the previous element
+          const isSelected = prevPanelId === currentSelectedElementId
+          geometryGroup.traverse((child) => {
+            if (child.isMesh && child.userData.isFill && child.userData.panelId === prevPanelId) {
+              if (isSelected) {
+                applySelectionHighlight(child)
+              } else {
+                resetToBaseColor(child)
+              }
+            }
+          })
+        } else if (currentSelectionMode === 'face') {
+          // Face mode - only reset the single face
+          if (prevFaceId === currentSelectedFaceId) {
+            applySelectionHighlight(hoveredMeshRef.current)
+          } else {
+            resetToBaseColor(hoveredMeshRef.current)
           }
+        } else {
+          // Default - reset to base
+          resetToBaseColor(hoveredMeshRef.current)
         }
       }
       
+      // Apply new hover
       if (newHovered?.userData.baseColor) {
-        const baseColor = newHovered.userData.baseColor
-        const hsl = {}
-        baseColor.getHSL(hsl)
-        newHovered.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.3))
-        if (newHovered.material.emissive) {
-          newHovered.material.emissive.setHex(0x222222)
-        }
-        // Sync to store for spreadsheet highlighting
-        const faceId = newHovered.userData.faceId
-        if (faceId) {
-          store.setHoveredFace(faceId)
+        const newPanelId = newHovered.userData.panelId
+        
+        if (currentSelectionMode === 'element' && newPanelId !== undefined && newPanelId !== null) {
+          // In element mode, highlight all faces of the element
+          geometryGroup.traverse((child) => {
+            if (child.isMesh && child.userData.isFill && child.userData.panelId === newPanelId) {
+              const baseColor = child.userData.baseColor
+              if (baseColor) {
+                const hsl = {}
+                baseColor.getHSL(hsl)
+                child.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.2))
+              }
+              if (child.material.emissive) {
+                child.material.emissive.setHex(0x152030)  // Subtle blue tint for hover
+              }
+            }
+          })
+          // Sync to store - use element hover
+          store.setHoveredElement(newPanelId)
+        } else {
+          // Face mode - only highlight single face
+          const baseColor = newHovered.userData.baseColor
+          const hsl = {}
+          baseColor.getHSL(hsl)
+          newHovered.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.2))
+          if (newHovered.material.emissive) {
+            newHovered.material.emissive.setHex(0x152030)  // Subtle blue tint for hover
+          }
+          // Sync to store for spreadsheet highlighting
+          const faceId = newHovered.userData.faceId
+          if (faceId) {
+            store.setHoveredFace(faceId)
+          }
         }
       } else if (hoveredMeshRef.current && !newHoveredVertex) {
         // Clear hover in store when leaving mesh (and not on vertex)
@@ -418,18 +787,61 @@ export function useThreeScene(containerRef, geometryData) {
 
   const resetHover = useCallback(() => {
     const renderer = rendererRef.current
+    const geometryGroup = geometryGroupRef.current
     const store = useViewportStore.getState()
+    const currentSelectionMode = store.selectionMode
     const currentSelectedFaceId = store.selectedFaceId
     const currentSelectedVertexIdx = store.selectedVertexIdx
+    const currentSelectedElementId = store.selectedElementId
+    
+    // Helper to apply selection highlight to a mesh
+    const applySelectionHighlight = (mesh) => {
+      const baseColor = mesh.userData.baseColor
+      if (baseColor) {
+        const hsl = {}
+        baseColor.getHSL(hsl)
+        mesh.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.25))
+      }
+      if (mesh.material.emissive) {
+        mesh.material.emissive.setHex(0x3d2000)  // Orange tint for selection
+      }
+    }
+    
+    // Helper to reset mesh to base color
+    const resetToBaseColor = (mesh) => {
+      if (mesh.userData.baseColor) {
+        mesh.material.color.copy(mesh.userData.baseColor)
+        if (mesh.material.emissive) {
+          mesh.material.emissive.setHex(0x000000)
+        }
+      }
+    }
     
     if (hoveredMeshRef.current?.userData.baseColor) {
-      // Only reset to base color if not selected
+      const panelId = hoveredMeshRef.current.userData.panelId
       const faceId = hoveredMeshRef.current.userData.faceId
-      if (faceId !== currentSelectedFaceId) {
-        hoveredMeshRef.current.material.color.copy(hoveredMeshRef.current.userData.baseColor)
-        if (hoveredMeshRef.current.material.emissive) {
-          hoveredMeshRef.current.material.emissive.setHex(0x000000)
+      
+      if (currentSelectionMode === 'element' && panelId !== undefined && panelId !== null && geometryGroup) {
+        // In element mode, handle all faces of the hovered element
+        const isSelected = panelId === currentSelectedElementId
+        geometryGroup.traverse((child) => {
+          if (child.isMesh && child.userData.isFill && child.userData.panelId === panelId) {
+            if (isSelected) {
+              applySelectionHighlight(child)
+            } else {
+              resetToBaseColor(child)
+            }
+          }
+        })
+      } else if (currentSelectionMode === 'face') {
+        // Face mode - reset or re-apply selection
+        if (faceId === currentSelectedFaceId) {
+          applySelectionHighlight(hoveredMeshRef.current)
+        } else {
+          resetToBaseColor(hoveredMeshRef.current)
         }
+      } else {
+        resetToBaseColor(hoveredMeshRef.current)
       }
     }
     hoveredMeshRef.current = null
@@ -479,15 +891,18 @@ export function useThreeScene(containerRef, geometryData) {
       createLabels(geometryData, labelGroup)
     }
     
-    // Create vertices (always create for selection, but control visibility)
-    createVertexMarkers(geometryData, vertexGroup, showVertices)
-  }, [geometryData, viewMode, colorMode, showFaceLabels, showVertices])
+    // Create vertices (always create for selection, visible only in point mode)
+    const showVerts = selectionMode === 'point'
+    createVertexMarkers(geometryData, vertexGroup, showVerts, vertexScale)
+  }, [geometryData, viewMode, colorMode, showFaceLabels, selectionMode, vertexScale])
 
   // Handle selection highlighting from spreadsheet
   useEffect(() => {
     const geometryGroup = geometryGroupRef.current
     const vertexGroup = vertexGroupRef.current
     if (!geometryGroup) return
+    
+    const showVerts = selectionMode === 'point'
     
     // Reset all highlights first
     geometryGroup.traverse((child) => {
@@ -506,13 +921,30 @@ export function useThreeScene(containerRef, geometryData) {
         if (sphere.userData.baseColor) {
           sphere.material.color.copy(sphere.userData.baseColor)
           sphere.scale.setScalar(1)
-          // Reset visibility based on showVertices setting
-          sphere.visible = showVertices
+          // Reset visibility based on selection mode
+          sphere.visible = showVerts
         }
       })
     }
     
-    // Highlight selected face
+    // Highlight selected element - all faces with matching panelId
+    if (selectedElementId !== null && selectedElementId !== undefined) {
+      geometryGroup.traverse((child) => {
+        if (child.isMesh && child.userData.isFill && child.userData.panelId === selectedElementId) {
+          const baseColor = child.userData.baseColor
+          if (baseColor) {
+            const hsl = {}
+            baseColor.getHSL(hsl)
+            child.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.25))
+          }
+          if (child.material.emissive) {
+            child.material.emissive.setHex(0x3d2000)  // Orange tint
+          }
+        }
+      })
+    }
+    
+    // Highlight selected face - Blender orange tint
     if (selectedFaceId) {
       geometryGroup.traverse((child) => {
         if (child.isMesh && child.userData.faceId === selectedFaceId) {
@@ -520,26 +952,28 @@ export function useThreeScene(containerRef, geometryData) {
           if (baseColor) {
             const hsl = {}
             baseColor.getHSL(hsl)
-            child.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.3))
+            child.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.25))
           }
           if (child.material.emissive) {
-            child.material.emissive.setHex(0x333333)
+            child.material.emissive.setHex(0x3d2000)  // Orange tint
           }
         }
       })
     }
     
-    // Highlight selected vertex
+    // Highlight selected vertex - Blender orange
     if (selectedVertexIdx !== null && vertexGroup) {
       vertexGroup.children.forEach((sphere) => {
         if (sphere.userData.vertexIndex === selectedVertexIdx) {
-          sphere.material.color.setHex(0xffff00)
+          sphere.material.color.setHex(0xff8000)  // Orange
           sphere.scale.setScalar(2)
-          sphere.visible = true  // Show selected vertex even if vertices are hidden
+          if (showVerts) {
+            sphere.visible = true
+          }
         }
       })
     }
-  }, [selectedFaceId, selectedVertexIdx, showVertices])
+  }, [selectedElementId, selectedFaceId, selectedVertexIdx, selectionMode])
 
   // Handle hover highlighting from spreadsheet
   useEffect(() => {
@@ -547,6 +981,7 @@ export function useThreeScene(containerRef, geometryData) {
     const vertexGroup = vertexGroupRef.current
     if (!geometryGroup) return
     
+    const showVerts = selectionMode === 'point'
     const prevHover = hoverRef.current
     const newHover = { hoveredFaceId, hoveredVertexIdx }
     hoverRef.current = newHover
@@ -581,12 +1016,13 @@ export function useThreeScene(containerRef, geometryData) {
           if (sphere.userData.vertexIndex !== selectedVertexIdx) {
             sphere.material.color.copy(sphere.userData.baseColor)
             sphere.scale.setScalar(1)
+            sphere.visible = showVerts  // Reset visibility to selection mode setting
           }
         }
       })
     }
     
-    // Apply new hover highlight (from spreadsheet)
+    // Apply new hover highlight (from spreadsheet) - blue tint
     if (hoveredFaceId) {
       geometryGroup.traverse((child) => {
         if (child.isMesh && child.userData.faceId === hoveredFaceId) {
@@ -594,10 +1030,10 @@ export function useThreeScene(containerRef, geometryData) {
           if (baseColor) {
             const hsl = {}
             baseColor.getHSL(hsl)
-            child.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.3))
+            child.material.color.setHSL(hsl.h, hsl.s, Math.min(1, hsl.l + 0.2))
           }
           if (child.material.emissive) {
-            child.material.emissive.setHex(0x222222)
+            child.material.emissive.setHex(0x152030)  // Blue tint for hover
           }
         }
       })
@@ -606,13 +1042,15 @@ export function useThreeScene(containerRef, geometryData) {
     if (hoveredVertexIdx !== null && vertexGroup) {
       vertexGroup.children.forEach((sphere) => {
         if (sphere.userData.vertexIndex === hoveredVertexIdx) {
-          sphere.material.color.setHex(0xffff00)
+          sphere.material.color.setHex(0x6090c0)  // Blue hover
           sphere.scale.setScalar(1.5)
-          sphere.visible = true  // Show hovered vertex even if vertices are hidden
+          if (showVerts) {
+            sphere.visible = true
+          }
         }
       })
     }
-  }, [hoveredFaceId, hoveredVertexIdx, selectedFaceId, selectedVertexIdx])
+  }, [hoveredFaceId, hoveredVertexIdx, selectedFaceId, selectedVertexIdx, selectionMode])
 
   // Reset view
   const resetView = useCallback(() => {
@@ -653,6 +1091,9 @@ function createPolygonMesh(panel, viewMode, colorMode) {
   
   if (!points || points.length < 3) return null
   
+  // Extract panel index from face id (e.g., "0-front" -> 0, "1-None" -> 1)
+  const panelId = id ? parseInt(id.split('-')[0], 10) : null
+  
   const geometry = new THREE.BufferGeometry()
   
   const vertices = []
@@ -683,11 +1124,17 @@ function createPolygonMesh(panel, viewMode, colorMode) {
       color: materialColor,
       flatShading: true,
       side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     })
   } else if (viewMode === 'unlit') {
     material = new THREE.MeshBasicMaterial({
       color: materialColor,
       side: THREE.DoubleSide,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     })
   } else if (viewMode === 'xray') {
     material = new THREE.MeshBasicMaterial({
@@ -696,6 +1143,9 @@ function createPolygonMesh(panel, viewMode, colorMode) {
       transparent: true,
       opacity: 0.3,
       depthWrite: false,
+      polygonOffset: true,
+      polygonOffsetFactor: 1,
+      polygonOffsetUnits: 1,
     })
   } else {
     material = new THREE.MeshBasicMaterial({ visible: false })
@@ -704,10 +1154,10 @@ function createPolygonMesh(panel, viewMode, colorMode) {
   const mesh = new THREE.Mesh(geometry, material)
   mesh.userData.isFill = true
   mesh.userData.baseColor = materialColor
-  mesh.userData.panelId = id
-  mesh.userData.faceId = id
+  mesh.userData.panelId = panelId  // Numeric panel index for element selection
+  mesh.userData.faceId = id        // Full face ID (e.g., "0-front")
   
-  // Edge lines
+  // Edge lines - visible outline on all faces
   const edgeVertices = []
   for (let i = 0; i < points.length; i++) {
     const p1 = points[i]
@@ -719,10 +1169,23 @@ function createPolygonMesh(panel, viewMode, colorMode) {
   const edgeGeometry = new THREE.BufferGeometry()
   edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgeVertices, 3))
   
+  let edgeColor, edgeOpacity
+  if (viewMode === 'wireframe') {
+    edgeColor = materialColor
+    edgeOpacity = 1.0
+  } else if (viewMode === 'xray') {
+    edgeColor = 0x000000
+    edgeOpacity = 0.3
+  } else {
+    // Lit/Unlit - show dark edges for face boundaries
+    edgeColor = 0x1a1a1a
+    edgeOpacity = 1.0
+  }
+  
   const edgeMaterial = new THREE.LineBasicMaterial({
-    color: viewMode === 'wireframe' ? materialColor : 0x000000,
-    opacity: viewMode === 'wireframe' ? 1.0 : 0.5,
-    transparent: viewMode !== 'wireframe',
+    color: edgeColor,
+    opacity: edgeOpacity,
+    transparent: edgeOpacity < 1.0,
   })
   
   const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial)
@@ -757,7 +1220,7 @@ function createLabels(geometryData, labelGroup) {
   })
 }
 
-function createVertexMarkers(geometryData, vertexGroup, visible = true) {
+function createVertexMarkers(geometryData, vertexGroup, visible = true, scale = 1.0) {
   const uniqueVertices = []
   const vertexMap = new Map()
   const TOLERANCE = 0.0001
@@ -782,7 +1245,8 @@ function createVertexMarkers(geometryData, vertexGroup, visible = true) {
     })
   })
   
-  const sphereGeometry = new THREE.SphereGeometry(0.02, 8, 8)
+  const baseSize = 0.02 * scale
+  const sphereGeometry = new THREE.SphereGeometry(baseSize, 8, 8)
   const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff })
   
   uniqueVertices.forEach((v) => {
@@ -791,6 +1255,7 @@ function createVertexMarkers(geometryData, vertexGroup, visible = true) {
     sphere.userData.isVertex = true
     sphere.userData.vertexIndex = v.index
     sphere.userData.baseColor = new THREE.Color(0x00ffff)
+    sphere.userData.baseScale = scale  // Store base scale for selection/hover
     sphere.visible = visible  // Control visibility
     vertexGroup.add(sphere)
   })

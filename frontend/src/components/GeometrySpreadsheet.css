@@ -1,10 +1,43 @@
 .geo-spreadsheet {
-  background-color: rgba(22, 33, 62, 0.98);
-  border-top: 1px solid var(--border-color);
+  background-color: var(--panel-bg);
   display: flex;
   flex-direction: column;
   flex-shrink: 0;
   position: relative;
+}
+
+.geo-spreadsheet.collapsed {
+  height: auto !important;
+}
+
+.geo-toggle-btn {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  background: transparent;
+  border: none;
+  color: var(--text-muted);
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 3px;
+  margin-right: 8px;
+}
+
+.geo-toggle-btn:hover {
+  background-color: var(--button-hover-bg);
+  color: var(--text-primary);
+}
+
+.geo-toggle-btn svg {
+  width: 14px;
+  height: 14px;
+}
+
+.geo-summary-collapsed {
+  display: flex;
+  gap: 12px;
+  font-size: 11px;
+  color: var(--text-muted);
 }
 
 .geo-resize-handle {
@@ -12,7 +45,7 @@
   top: 0;
   left: 0;
   right: 0;
-  height: 6px;
+  height: 3px;
   cursor: row-resize;
   background: transparent;
   z-index: 10;
@@ -21,15 +54,15 @@
 .geo-resize-handle::after {
   content: '';
   position: absolute;
-  top: 2px;
+  top: 0;
   left: 50%;
   transform: translateX(-50%);
-  width: 40px;
-  height: 3px;
-  background-color: var(--border-color);
-  border-radius: 2px;
+  width: 24px;
+  height: 2px;
+  background-color: #505050;
+  border-radius: 1px;
   opacity: 0;
-  transition: opacity 0.15s;
+  transition: opacity 0.1s;
 }
 
 .geo-resize-handle:hover::after {
@@ -40,43 +73,53 @@
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 8px 12px;
+  padding: 4px 8px;
   background-color: var(--header-bg);
-  border-bottom: 1px solid var(--border-color);
   flex-shrink: 0;
+  min-height: 28px;
 }
 
 .geo-tabs {
   display: flex;
-  gap: 4px;
+  gap: 2px;
 }
 
 .geo-tab {
-  padding: 6px 14px;
+  padding: 4px 10px;
   background-color: transparent;
   border: 1px solid transparent;
-  border-radius: 6px;
+  border-radius: 3px;
   color: var(--text-muted);
-  font-size: 12px;
+  font-size: 10px;
   font-weight: 500;
   cursor: pointer;
-  transition: all 0.15s;
+  transition: all 0.1s;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+
+.geo-tab svg {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
 }
 
 .geo-tab:hover {
   color: var(--text-secondary);
+  background-color: rgba(255, 255, 255, 0.05);
 }
 
 .geo-tab.active {
-  background-color: rgba(233, 69, 96, 0.2);
+  background-color: var(--accent-subtle);
   border-color: var(--accent-color);
   color: var(--accent-color);
 }
 
 .geo-summary {
   display: flex;
-  gap: 16px;
-  font-size: 11px;
+  gap: 12px;
+  font-size: 10px;
   color: var(--text-muted);
 }
 
@@ -85,27 +128,29 @@
   overflow: hidden;
 }
 
-/* AG Grid dark theme overrides */
+/* AG Grid dark theme overrides - Blender style */
 .geo-content.ag-theme-alpine-dark {
-  --ag-background-color: transparent;
-  --ag-header-background-color: var(--header-bg);
+  --ag-background-color: var(--bg-secondary);
+  --ag-header-background-color: var(--panel-bg);
   --ag-odd-row-background-color: rgba(255, 255, 255, 0.02);
-  --ag-row-hover-color: rgba(233, 69, 96, 0.1);
-  --ag-selected-row-background-color: rgba(233, 69, 96, 0.25);
-  --ag-font-size: 12px;
+  --ag-row-hover-color: rgba(237, 87, 0, 0.08);
+  --ag-selected-row-background-color: rgba(237, 87, 0, 0.2);
+  --ag-font-size: 11px;
   --ag-font-family: 'Consolas', 'SF Mono', monospace;
   --ag-header-foreground-color: var(--text-muted);
   --ag-foreground-color: var(--text-secondary);
   --ag-border-color: var(--border-color);
-  --ag-secondary-border-color: var(--border-color);
+  --ag-secondary-border-color: var(--border-subtle);
   --ag-input-focus-border-color: var(--accent-color);
   --ag-range-selection-border-color: var(--accent-color);
+  --ag-row-border-color: transparent;
 }
 
 .geo-content.ag-theme-alpine-dark .ag-header-cell-text {
   text-transform: uppercase;
-  font-size: 10px;
+  font-size: 9px;
   font-weight: 600;
+  letter-spacing: 0.5px;
 }
 
 .geo-content.ag-theme-alpine-dark .ag-filter-icon {
@@ -118,6 +163,11 @@
 
 /* Hover highlight from viewport */
 .geo-content.ag-theme-alpine-dark .geo-row-hovered {
-  background-color: rgba(0, 255, 255, 0.15) !important;
-  border-left: 2px solid #00ffff;
+  background-color: rgba(71, 114, 179, 0.2) !important;
+  border-left: 2px solid var(--hover-color);
+}
+
+/* Index column styling */
+.geo-content.ag-theme-alpine-dark .geo-cell-index {
+  background-color: rgba(0, 0, 0, 0.2);
 }

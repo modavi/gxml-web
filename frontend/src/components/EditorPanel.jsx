@@ -1,6 +1,8 @@
 import { useCallback, useRef, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
 import { useAppStore } from '../stores/appStore'
+import { useViewportStore } from '../stores/viewportStore'
+import { IconGXML } from './ui/Icons'
 import './EditorPanel.css'
 
 const AUTO_UPDATE_DELAY = 500
@@ -14,7 +16,12 @@ function EditorPanel() {
     renderGXML,
     error,
     schema,
+    setEditorRef,
+    selectPanelInEditor,
   } = useAppStore()
+  
+  const selectedElementId = useViewportStore((state) => state.selectedElementId)
+  const selectionMode = useViewportStore((state) => state.selectionMode)
   
   const timeoutRef = useRef(null)
   const editorRef = useRef(null)
@@ -24,9 +31,17 @@ function EditorPanel() {
   useEffect(() => {
     schemaRef.current = schema
   }, [schema])
+  
+  // When element selection changes in viewport, highlight corresponding XML
+  useEffect(() => {
+    if (selectionMode === 'element' && selectedElementId !== null) {
+      selectPanelInEditor(selectedElementId)
+    }
+  }, [selectedElementId, selectionMode, selectPanelInEditor])
 
   const handleEditorDidMount = useCallback((editor, monaco) => {
     editorRef.current = editor
+    setEditorRef(editor)  // Store in appStore for cross-component access
     
     // Register GXML completion provider - use schemaRef to always get latest schema
     monaco.languages.registerCompletionItemProvider('xml', {
@@ -40,7 +55,7 @@ function EditorPanel() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       renderGXML()
     })
-  }, [renderGXML])
+  }, [renderGXML, setEditorRef])
 
   const handleEditorChange = useCallback((value) => {
     setXmlContent(value || '')
@@ -74,7 +89,7 @@ function EditorPanel() {
   return (
     <div className="editor-panel">
       <div className="panel-header">
-        <h2>GXML Editor</h2>
+        <h2><IconGXML /> GXML Editor</h2>
         <div className="editor-controls">
           <label className="auto-update-label">
             <input

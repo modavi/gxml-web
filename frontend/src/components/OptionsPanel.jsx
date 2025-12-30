@@ -14,8 +14,8 @@ function OptionsPanel() {
     setShowFaceLabels,
     hideOccludedLabels,
     setHideOccludedLabels,
-    showVertices,
-    setShowVertices,
+    vertexScale,
+    setVertexScale,
     enableInertia,
     setEnableInertia,
   } = useViewportStore()
@@ -75,11 +75,14 @@ function OptionsPanel() {
         />
       </OptionSection>
 
-      <OptionSection title="Vertices">
-        <Toggle
-          label="Show Vertices"
-          checked={showVertices}
-          onChange={setShowVertices}
+      <OptionSection title="Point Size">
+        <Slider
+          label="Size"
+          value={vertexScale}
+          min={0.5}
+          max={3}
+          step={0.1}
+          onChange={setVertexScale}
         />
       </OptionSection>
 
@@ -132,6 +135,23 @@ function Toggle({ label, checked, onChange }) {
       />
       <span>{label}</span>
     </label>
+  )
+}
+
+function Slider({ label, value, min, max, step, onChange }) {
+  return (
+    <div className="option-slider">
+      <span className="option-slider-label">{label}</span>
+      <input
+        type="range"
+        min={min}
+        max={max}
+        step={step}
+        value={value}
+        onChange={(e) => onChange(parseFloat(e.target.value))}
+      />
+      <span className="option-slider-value">{value.toFixed(1)}</span>
+    </div>
   )
 }
 

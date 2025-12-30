@@ -1,31 +1,30 @@
 .toolbar-btn {
-  width: 36px;
-  height: 36px;
+  width: 28px;
+  height: 28px;
   display: flex;
   align-items: center;
   justify-content: center;
-  background-color: rgba(30, 30, 46, 0.85);
-  border: 1px solid rgba(255, 255, 255, 0.1);
-  border-radius: 8px;
-  color: var(--text-muted);
+  background-color: var(--panel-bg);
+  border: 1px solid var(--border-color);
+  border-radius: 3px;
+  color: var(--text-secondary);
   cursor: pointer;
-  transition: all 0.2s;
-  backdrop-filter: blur(8px);
+  transition: all 0.1s;
 }
 
 .toolbar-btn:hover {
-  background-color: rgba(50, 50, 70, 0.9);
+  background-color: var(--header-bg);
   color: var(--text-primary);
-  border-color: rgba(255, 255, 255, 0.2);
+  border-color: #505050;
 }
 
 .toolbar-btn.active {
-  background-color: rgba(233, 69, 96, 0.3);
+  background-color: var(--accent-subtle);
   border-color: var(--accent-color);
   color: var(--accent-color);
 }
 
 .toolbar-btn svg {
-  width: 16px;
-  height: 16px;
+  width: 14px;
+  height: 14px;
 }

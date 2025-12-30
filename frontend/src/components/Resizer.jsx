@@ -1,7 +1,7 @@
 import { useRef, useEffect, useCallback } from 'react'
 import './Resizer.css'
 
-function Resizer() {
+function Resizer({ side = 'left' }) {
   const resizerRef = useRef(null)
   const isDraggingRef = useRef(false)
 
@@ -18,20 +18,35 @@ function Resizer() {
     }
     
     const container = document.querySelector('.app-container')
-    const editorPanel = document.querySelector('.editor-panel')
-    if (!container || !editorPanel) return
-    
     const containerRect = container.getBoundingClientRect()
-    const newWidth = e.clientX - containerRect.left
-    const minWidth = 250
-    const maxWidth = containerRect.width - 300
-    const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth))
     
-    editorPanel.style.width = `${clampedWidth}px`
+    if (side === 'left') {
+      // Resize editor panel (left side)
+      const editorPanel = document.querySelector('.editor-panel')
+      if (!container || !editorPanel) return
+      
+      const newWidth = e.clientX - containerRect.left
+      const minWidth = 250
+      const maxWidth = containerRect.width - 500
+      const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth))
+      
+      editorPanel.style.width = `${clampedWidth}px`
+    } else {
+      // Resize details panel (right side)
+      const detailsPanel = document.querySelector('.details-panel')
+      if (!container || !detailsPanel) return
+      
+      const newWidth = containerRect.right - e.clientX
+      const minWidth = 180
+      const maxWidth = containerRect.width - 500
+      const clampedWidth = Math.max(minWidth, Math.min(maxWidth, newWidth))
+      
+      detailsPanel.style.width = `${clampedWidth}px`
+    }
     
     // Dispatch resize event for Three.js canvas
     window.dispatchEvent(new Event('resize'))
-  }, [])
+  }, [side])
 
   const handleMouseUp = useCallback(() => {
     if (isDraggingRef.current) {

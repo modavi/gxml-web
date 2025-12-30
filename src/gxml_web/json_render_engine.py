@@ -52,6 +52,26 @@ class JSONRenderEngine(BaseRenderContext):
         else:
             # Assign a color based on element id
             self._panel_data['color'] = self._get_next_color()
+        
+        # For panels, get endpoint info (where the next panel would attach)
+        if hasattr(element, 'transform_point'):
+            try:
+                # Get start and end points in world space
+                # Use (0, 0.5, 0) for start center and (1, 0.5, 0) for end center
+                # X: 0=start, 1=end of panel length
+                # Y: 0.5 = middle height
+                # Z: 0 = center of thickness (thickness is symmetric around Z=0)
+                start_pt = element.transform_point((0, 0.5, 0))
+                end_pt = element.transform_point((1, 0.5, 0))
+                
+                self._panel_data['startPoint'] = [float(start_pt[0]), float(start_pt[1]), float(start_pt[2]) if len(start_pt) > 2 else 0.0]
+                self._panel_data['endPoint'] = [float(end_pt[0]), float(end_pt[1]), float(end_pt[2]) if len(end_pt) > 2 else 0.0]
+                
+                # Also get rotation info
+                if hasattr(element, 'rotation'):
+                    self._panel_data['rotation'] = [float(element.rotation[0]), float(element.rotation[1]), float(element.rotation[2])]
+            except Exception as e:
+                pass  # Skip if transform fails
     
     def create_poly(self, id, points, geoKey=None):
         """Create a polygon from points.
@@ -101,6 +121,9 @@ class JSONRenderEngine(BaseRenderContext):
             'size': size,
             'color': self._panel_data.get('color'),
             'geoKey': geoKey,
+            'startPoint': self._panel_data.get('startPoint'),
+            'endPoint': self._panel_data.get('endPoint'),
+            'rotation': self._panel_data.get('rotation'),
         }
         
         self.panels.append(panel_info)

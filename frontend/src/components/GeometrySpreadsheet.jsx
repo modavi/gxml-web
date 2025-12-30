@@ -4,6 +4,7 @@ import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { useAppStore } from '../stores/appStore'
 import { useViewportStore } from '../stores/viewportStore'
+import { IconPoint, IconVertex, IconFace, IconTable, IconChevronDown, IconChevronUp } from './ui/Icons'
 import './GeometrySpreadsheet.css'
 
 function GeometrySpreadsheet() {
@@ -11,6 +12,8 @@ function GeometrySpreadsheet() {
   const {
     spreadsheetTab,
     setSpreadsheetTab,
+    spreadsheetOpen,
+    toggleSpreadsheet,
     selectedFaceId,
     selectedVertexIdx,
     setSelectedFace,
@@ -26,7 +29,7 @@ function GeometrySpreadsheet() {
   const verticesGridRef = useRef(null)
   const facesGridRef = useRef(null)
   const containerRef = useRef(null)
-  const [height, setHeight] = useState(280)
+  const [height, setHeight] = useState(350)
   const isDraggingRef = useRef(false)
 
   // Handle resize drag
@@ -162,6 +165,7 @@ function GeometrySpreadsheet() {
       width: 70,
       filter: 'agNumberColumnFilter',
       sortable: true,
+      cellClass: 'geo-cell-index',
     },
     {
       field: 'x',
@@ -205,6 +209,7 @@ function GeometrySpreadsheet() {
       width: 70,
       filter: 'agNumberColumnFilter',
       sortable: true,
+      cellClass: 'geo-cell-index',
     },
     {
       field: 'x',
@@ -254,6 +259,7 @@ function GeometrySpreadsheet() {
       width: 70,
       filter: 'agNumberColumnFilter',
       sortable: true,
+      cellClass: 'geo-cell-index',
     },
     {
       field: 'id',
@@ -417,43 +423,68 @@ function GeometrySpreadsheet() {
   }, [selectedFaceId, spreadsheetTab, allFaces])
 
   return (
-    <div className="geo-spreadsheet" ref={containerRef} style={{ height }}>
-      <div 
-        className="geo-resize-handle"
-        onMouseDown={handleResizeStart}
-      />
+    <div className={`geo-spreadsheet ${spreadsheetOpen ? '' : 'collapsed'}`} ref={containerRef} style={{ height: spreadsheetOpen ? height : 'auto' }}>
+      {spreadsheetOpen && (
+        <div 
+          className="geo-resize-handle"
+          onMouseDown={handleResizeStart}
+        />
+      )}
       <div className="geo-spreadsheet-header">
-        <div className="geo-tabs">
-          <button
-            className={`geo-tab ${spreadsheetTab === 'points' ? 'active' : ''}`}
-            onClick={() => setSpreadsheetTab('points')}
-          >
-            Points
-          </button>
-          <button
-            className={`geo-tab ${spreadsheetTab === 'vertices' ? 'active' : ''}`}
-            onClick={() => setSpreadsheetTab('vertices')}
-          >
-            Vertices
-          </button>
-          <button
-            className={`geo-tab ${spreadsheetTab === 'faces' ? 'active' : ''}`}
-            onClick={() => setSpreadsheetTab('faces')}
-          >
-            Faces
-          </button>
-        </div>
-        <div className="geo-summary">
-          <span>{allPoints.length} points</span>
-          <span>{allVertices.length} verts</span>
-          <span>{allFaces.length} faces</span>
-        </div>
+        <button
+          className="geo-toggle-btn"
+          onClick={toggleSpreadsheet}
+          title={spreadsheetOpen ? 'Collapse Spreadsheet' : 'Expand Spreadsheet'}
+        >
+          {spreadsheetOpen ? <IconChevronDown /> : <IconChevronUp />}
+          <IconTable />
+        </button>
+        {spreadsheetOpen && (
+          <>
+            <div className="geo-tabs">
+              <button
+                className={`geo-tab ${spreadsheetTab === 'points' ? 'active' : ''}`}
+                onClick={() => setSpreadsheetTab('points')}
+                title="Points (deduplicated vertices)"
+              >
+                <IconPoint /> Points
+              </button>
+              <button
+                className={`geo-tab ${spreadsheetTab === 'vertices' ? 'active' : ''}`}
+                onClick={() => setSpreadsheetTab('vertices')}
+                title="Vertices (per-face, with duplicates)"
+              >
+                <IconVertex /> Vertices
+              </button>
+              <button
+                className={`geo-tab ${spreadsheetTab === 'faces' ? 'active' : ''}`}
+                onClick={() => setSpreadsheetTab('faces')}
+                title="Faces"
+              >
+                <IconFace /> Faces
+              </button>
+            </div>
+            <div className="geo-summary">
+              <span>{allPoints.length} points</span>
+              <span>{allVertices.length} verts</span>
+              <span>{allFaces.length} faces</span>
+            </div>
+          </>
+        )}
+        {!spreadsheetOpen && (
+          <div className="geo-summary-collapsed">
+            <span>{allPoints.length} pts</span>
+            <span>{allVertices.length} verts</span>
+            <span>{allFaces.length} faces</span>
+          </div>
+        )}
       </div>
       
-      <div 
-        className="geo-content ag-theme-alpine-dark"
-        onMouseLeave={onRowMouseOut}
-      >
+      {spreadsheetOpen && (
+        <div 
+          className="geo-content ag-theme-alpine-dark"
+          onMouseLeave={onRowMouseOut}
+        >
         {spreadsheetTab === 'points' && (
           <AgGridReact
             key="points-grid"
@@ -466,7 +497,7 @@ function GeometrySpreadsheet() {
             onCellMouseOver={onPointRowMouseOver}
             getRowClass={getPointRowClass}
             animateRows={false}
-            headerHeight={32}
+            headerHeight={24}
             rowHeight={28}
             suppressCellFocus={true}
             getRowId={(params) => String(params.data.idx)}
@@ -484,7 +515,7 @@ function GeometrySpreadsheet() {
             onCellMouseOver={onVertexRowMouseOver}
             getRowClass={getVertexRowClass}
             animateRows={false}
-            headerHeight={32}
+            headerHeight={24}
             rowHeight={28}
             suppressCellFocus={true}
             getRowId={(params) => String(params.data.idx)}
@@ -502,13 +533,14 @@ function GeometrySpreadsheet() {
             onCellMouseOver={onFaceRowMouseOver}
             getRowClass={getFaceRowClass}
             animateRows={false}
-            headerHeight={32}
+            headerHeight={24}
             rowHeight={28}
             suppressCellFocus={true}
             getRowId={(params) => params.data.id}
           />
         )}
-      </div>
+        </div>
+      )}
     </div>
   )
 }
