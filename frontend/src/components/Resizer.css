@@ -1,0 +1,22 @@
+.resizer {
+  width: 4px;
+  background-color: var(--border-color);
+  cursor: col-resize;
+  flex-shrink: 0;
+  transition: background-color 0.15s;
+  position: relative;
+}
+
+.resizer::after {
+  content: '';
+  position: absolute;
+  top: 0;
+  left: -3px;
+  right: -3px;
+  bottom: 0;
+}
+
+.resizer:hover,
+.resizer.dragging {
+  background-color: var(--accent-color);
+}

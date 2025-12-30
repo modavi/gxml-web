@@ -1,0 +1,34 @@
+.viewport-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  background-color: var(--viewport-bg);
+  min-width: 300px;
+  overflow: hidden;
+}
+
+.viewport-wrapper {
+  flex: 1;
+  position: relative;
+  overflow: hidden;
+}
+
+.viewport-container {
+  width: 100%;
+  height: 100%;
+  position: relative;
+}
+
+.viewport-container canvas {
+  display: block;
+}
+
+/* Toolbar */
+.viewport-toolbar {
+  position: absolute;
+  top: 12px;
+  right: 12px;
+  display: flex;
+  gap: 6px;
+  z-index: 10;
+}

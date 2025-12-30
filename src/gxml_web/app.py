@@ -27,11 +27,15 @@ from gxml_web.json_render_engine import JSONRenderEngine
 
 app = FastAPI(title="GXML Web Viewer")
 
-# Get the static files directory
+# Get the static files directories
 STATIC_DIR = Path(__file__).parent / "static"
+REACT_DIST_DIR = STATIC_DIR / "dist"
 
 # Path to XSD schema
 XSD_PATH = Path(__file__).parent.parent.parent.parent / "gxml" / "misc" / "gxml.xsd"
+
+# Check if React build exists (production mode)
+USE_REACT_BUILD = REACT_DIST_DIR.exists() and (REACT_DIST_DIR / "index.html").exists()
 
 
 class GXMLRequest(BaseModel):
@@ -186,18 +190,29 @@ async def render_gxml(request: GXMLRequest) -> GXMLResponse:
         return GXMLResponse(success=True, data=result)
     
     except Exception as e:
-        import traceback
-        return GXMLResponse(success=False, error=f"{str(e)}\n{traceback.format_exc()}")
+        # For XML parse errors, extract just the message
+        error_msg = str(e)
+        if 'ParseError' in type(e).__name__ or 'xml.etree' in str(type(e)):
+            # Clean up XML parse errors
+            error_msg = f"XML Parse Error: {error_msg}"
+        return GXMLResponse(success=False, error=error_msg)
 
 
 @app.get("/")
 async def root():
     """Serve the main HTML page."""
+    if USE_REACT_BUILD:
+        return FileResponse(REACT_DIST_DIR / "index.html")
     return FileResponse(STATIC_DIR / "index.html")
 
 
 # Mount static files
-app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
+if USE_REACT_BUILD:
+    # Serve React build assets
+    app.mount("/assets", StaticFiles(directory=REACT_DIST_DIR / "assets"), name="assets")
+else:
+    # Serve legacy static files
+    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 if __name__ == "__main__":
