@@ -9,16 +9,25 @@ import { useAppStore } from '../stores/appStore'
 // Creation Mode Preview Panel Settings
 // ============================================
 const PREVIEW_PANEL = {
-  // Stripe colors
+  // Colors
   stripeColor1: 0xffaa55,      // Light stripe color
   stripeColor2: 0xdd9944,      // Dark stripe color
-  wireframeColor: 0xffaa44,    // Wireframe edge color
+  holoTint: 0xffffff,          // Holographic cyan tint
+  wireframeColor: 0xffcc66,    // Wireframe edge color
   
   // Stripe settings
-  stripeScale: 6.0,            // Stripe density (higher = more stripes)
+  stripeScale: 6.0,            // Diagonal stripe density
+  
+  // Scanline settings
+  scanlineScale: 200.0,        // Scanline density (higher = smaller)
+  scanlineIntensity: 0.32,     // How visible scanlines are (0-1)
+  
+  // Holographic settings
+  gradientStart: 0.3,          // Where gradient starts (0 = bottom, 1 = top)
+  gradientStrength: 0.7,      // Vertical gradient strength (0-1)
   
   // Overall
-  opacity: 0.6,                // Panel transparency
+  opacity: 0.55,               // Panel transparency
 }
 
 export function useThreeScene(containerRef, geometryData) {
@@ -414,31 +423,60 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Create preview mesh if it doesn't exist
       if (!previewMeshRef.current) {
-        // Custom shader material for diagonal stripes
-        const stripeMaterial = new THREE.ShaderMaterial({
+        // Custom shader material for holographic effect with diagonal stripes
+        const holoMaterial = new THREE.ShaderMaterial({
           uniforms: {
-            color1: { value: new THREE.Color(PREVIEW_PANEL.stripeColor1) },
-            color2: { value: new THREE.Color(PREVIEW_PANEL.stripeColor2) },
+            stripeColor1: { value: new THREE.Color(PREVIEW_PANEL.stripeColor1) },
+            stripeColor2: { value: new THREE.Color(PREVIEW_PANEL.stripeColor2) },
+            holoTint: { value: new THREE.Color(PREVIEW_PANEL.holoTint) },
             stripeScale: { value: PREVIEW_PANEL.stripeScale },
+            scanlineScale: { value: PREVIEW_PANEL.scanlineScale },
+            scanlineIntensity: { value: PREVIEW_PANEL.scanlineIntensity },
+            gradientStart: { value: PREVIEW_PANEL.gradientStart },
+            gradientStrength: { value: PREVIEW_PANEL.gradientStrength },
             opacity: { value: PREVIEW_PANEL.opacity },
             meshScale: { value: new THREE.Vector3(1, 1, 1) }
           },
           vertexShader: `
             uniform vec3 meshScale;
+            varying vec3 vWorldPosition;
             varying vec3 vAnchoredPosition;
+            varying vec2 vUv;
+            varying vec3 vNormal;
             void main() {
-              // Anchor pattern to start of box
+              vUv = uv;
+              vNormal = normal;
+              // Get world position for consistent scanlines
+              vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+              // Anchor diagonal stripes to start of box
               vec3 anchored = position + vec3(0.5, 0.5, 0.125);
               vAnchoredPosition = anchored * meshScale;
               gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
             }
           `,
           fragmentShader: `
-            uniform vec3 color1;
-            uniform vec3 color2;
+            uniform vec3 stripeColor1;
+            uniform vec3 stripeColor2;
+            uniform vec3 holoTint;
             uniform float stripeScale;
+            uniform float scanlineScale;
+            uniform float scanlineIntensity;
+            uniform float gradientStart;
+            uniform float gradientStrength;
             uniform float opacity;
+            varying vec3 vWorldPosition;
             varying vec3 vAnchoredPosition;
+            varying vec2 vUv;
+            varying vec3 vNormal;
+            
+            // Overlay blend mode (like Photoshop)
+            vec3 blendOverlay(vec3 base, vec3 blend) {
+              return vec3(
+                base.r < 0.5 ? (2.0 * base.r * blend.r) : (1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r)),
+                base.g < 0.5 ? (2.0 * base.g * blend.g) : (1.0 - 2.0 * (1.0 - base.g) * (1.0 - blend.g)),
+                base.b < 0.5 ? (2.0 * base.b * blend.b) : (1.0 - 2.0 * (1.0 - base.b) * (1.0 - blend.b))
+              );
+            }
             
             void main() {
               // Diagonal stripe pattern anchored to start point
@@ -446,8 +484,29 @@ export function useThreeScene(containerRef, geometryData) {
               float stripe = sin(anchoredCoord * stripeScale * 3.14159) * 0.5 + 0.5;
               stripe = step(0.5, stripe);
               
-              // Mix colors based on stripe
-              vec3 color = mix(color2, color1, stripe * 0.7);
+              // Base color from stripes
+              vec3 color = mix(stripeColor2, stripeColor1, stripe * 0.7);
+              
+              // Prepare overlay color
+              vec3 overlayColor = blendOverlay(color, holoTint);
+              
+              // Determine face type from normal
+              float isTopFace = step(0.5, vNormal.y);      // Top face (normal.y > 0.5)
+              float isBottomFace = step(0.5, -vNormal.y);  // Bottom face (normal.y < -0.5)
+              
+              // Remap UV.y so gradient starts at gradientStart and ends at 1.0
+              float remappedY = clamp((vUv.y - gradientStart) / (1.0 - gradientStart), 0.0, 1.0);
+              
+              // Vertical gradient on front/back/end faces
+              // Top face gets full gradient endpoint, bottom face gets no gradient
+              float gradientAmount = mix(remappedY * gradientStrength, gradientStrength, isTopFace);
+              gradientAmount = mix(gradientAmount, 0.0, isBottomFace);
+              color = mix(color, overlayColor, gradientAmount);
+              
+              // Horizontal scanlines (world space Y for consistency)
+              float scanline = sin(vWorldPosition.y * scanlineScale) * 0.5 + 0.5;
+              scanline = smoothstep(0.3, 0.7, scanline);
+              color = mix(color, color * 0.75, scanline * scanlineIntensity);
               
               gl_FragColor = vec4(color, opacity);
             }
@@ -459,7 +518,7 @@ export function useThreeScene(containerRef, geometryData) {
         
         // BoxGeometry(width, height, depth)
         const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
-        const previewMesh = new THREE.Mesh(previewGeo, stripeMaterial)
+        const previewMesh = new THREE.Mesh(previewGeo, holoMaterial)
         
         // Simple edge outline
         const edgesGeo = new THREE.EdgesGeometry(previewGeo)
