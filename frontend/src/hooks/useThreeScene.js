@@ -5,6 +5,10 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer'
 import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass'
 import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass'
+import { Line2 } from 'three/examples/jsm/lines/Line2'
+import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial'
+import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeometry'
+import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2'
 import { useViewportStore } from '../stores/viewportStore'
 import { useAppStore } from '../stores/appStore'
 
@@ -33,9 +37,14 @@ const PREVIEW_PANEL = {
   gradientStrength: 0.7,      // Vertical gradient strength (0-1)
   
   // Bloom settings for wireframe glow
-  bloomStrength: 1.5,          // Glow intensity
-  bloomRadius: 0.4,            // Glow spread
+  bloomStrength: 0.55,          // Glow intensity
+  bloomRadius: 0.1,            // Glow spread
   bloomThreshold: 0.0,         // Brightness threshold
+  bloomOpacity: 1.0,           // Bloom overlay opacity (0-1)
+  
+  // Wireframe settings
+  wireframeWidth: 3.0,         // Line width in pixels
+  wireframeOpacity: 0.18,       // Wireframe line opacity (0-1)
   
   // Overall
   opacity: 0.55,               // Panel transparency
@@ -193,7 +202,8 @@ export function useThreeScene(containerRef, geometryData) {
     const bloomQuadGeo = new THREE.PlaneGeometry(2, 2)
     const bloomQuadMat = new THREE.ShaderMaterial({
       uniforms: { 
-        bloomTexture: { value: null }
+        bloomTexture: { value: null },
+        opacity: { value: PREVIEW_PANEL.bloomOpacity }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -204,9 +214,11 @@ export function useThreeScene(containerRef, geometryData) {
       `,
       fragmentShader: `
         uniform sampler2D bloomTexture;
+        uniform float opacity;
         varying vec2 vUv;
         void main() {
-          gl_FragColor = texture2D(bloomTexture, vUv);
+          vec4 bloom = texture2D(bloomTexture, vUv);
+          gl_FragColor = bloom * opacity;
         }
       `,
       transparent: true,
@@ -387,6 +399,14 @@ export function useThreeScene(containerRef, geometryData) {
       renderer.setSize(w, h)
       scene.userData.bloomComposer?.setSize(w, h)
       labelRenderer.setSize(w, h)
+      // Update LineMaterial resolution for thick lines
+      if (previewMeshRef.current) {
+        previewMeshRef.current.traverse((child) => {
+          if (child.material && child.material.resolution) {
+            child.material.resolution.set(w, h)
+          }
+        })
+      }
     }
     window.addEventListener('resize', handleResize)
 
@@ -644,15 +664,46 @@ export function useThreeScene(containerRef, geometryData) {
         const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
         const previewMesh = new THREE.Mesh(previewGeo, holoMaterial)
         
-        // Glowing edge outline - add to bloom layer for glow effect
-        // Use bright emissive color for bloom to pick up
-        const edgesGeo = new THREE.EdgesGeometry(previewGeo)
-        const edgesMat = new THREE.LineBasicMaterial({
-          color: new THREE.Color(PREVIEW_PANEL.wireframeColor).multiplyScalar(2.0),  // Brighten for bloom
-          toneMapped: false  // Prevent tone mapping from dimming the glow
+        // Glowing edge outline using thick lines (LineSegments2) for proper antialiasing
+        // Box edges as separate line segments (pairs of points)
+        // Unit box is 1x1x0.25, centered at origin
+        const hw = 0.5, hh = 0.5, hd = 0.125  // half width, height, depth
+        const boxEdges = [
+          // Bottom face (4 edges)
+          -hw, -hh, -hd,  hw, -hh, -hd,
+           hw, -hh, -hd,  hw, -hh,  hd,
+           hw, -hh,  hd, -hw, -hh,  hd,
+          -hw, -hh,  hd, -hw, -hh, -hd,
+          // Top face (4 edges)
+          -hw,  hh, -hd,  hw,  hh, -hd,
+           hw,  hh, -hd,  hw,  hh,  hd,
+           hw,  hh,  hd, -hw,  hh,  hd,
+          -hw,  hh,  hd, -hw,  hh, -hd,
+          // Vertical edges (4 edges)
+          -hw, -hh, -hd, -hw,  hh, -hd,
+           hw, -hh, -hd,  hw,  hh, -hd,
+           hw, -hh,  hd,  hw,  hh,  hd,
+          -hw, -hh,  hd, -hw,  hh,  hd,
+        ]
+        
+        const lineGeo = new LineSegmentsGeometry()
+        lineGeo.setPositions(boxEdges)
+        
+        const lineMat = new LineMaterial({
+          color: new THREE.Color(PREVIEW_PANEL.wireframeColor).multiplyScalar(2.0),
+          linewidth: PREVIEW_PANEL.wireframeWidth,
+          opacity: PREVIEW_PANEL.wireframeOpacity,
+          toneMapped: false,
+          transparent: true,
+          depthTest: true,
+          depthWrite: false,
         })
-        const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat)
-        edgeLines.layers.enable(BLOOM_LAYER)  // Add to bloom layer for glow
+        // LineMaterial needs resolution for proper width calculation
+        lineMat.resolution.set(window.innerWidth, window.innerHeight)
+        
+        const edgeLines = new LineSegments2(lineGeo, lineMat)
+        edgeLines.computeLineDistances()
+        edgeLines.layers.enable(BLOOM_LAYER)
         previewMesh.add(edgeLines)
         
         previewMeshRef.current = previewMesh
