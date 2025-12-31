@@ -19,6 +19,15 @@ const BLOOM_LAYER = 1
 // Creation Mode Preview Panel Settings
 // ============================================
 const PREVIEW_PANEL = {
+  // Style toggle - set to false for simple solid orange preview
+  fancyPreview: true,
+  
+  // Simple style settings (when fancyPreview = false)
+  simpleColor: 0xff8844,       // Solid orange color
+  simpleOpacity: 0.4,          // Panel transparency
+  simpleWireframeColor: 0xffaa00, // Wireframe color
+  
+  // Fancy style settings (when fancyPreview = true)
   // Colors
   stripeColor1: 0xffaa55,      // Light stripe color
   stripeColor2: 0xdd9944,      // Dark stripe color
@@ -175,9 +184,29 @@ export function useThreeScene(containerRef, geometryData) {
     rendererRef.current = renderer
 
     // ============================================
-    // Selective Bloom Setup
+    // Selective Bloom Setup with Depth-Aware Compositing
     // Render scene normally, then overlay glow from bloom-layer objects
+    // only where they are not occluded by main scene geometry
     // ============================================
+    
+    // Render targets for depth-aware compositing
+    const mainRenderTarget = new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthTexture: new THREE.DepthTexture(width, height),
+    })
+    mainRenderTarget.depthTexture.format = THREE.DepthFormat
+    mainRenderTarget.depthTexture.type = THREE.UnsignedShortType
+    
+    const bloomDepthTarget = new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+      depthTexture: new THREE.DepthTexture(width, height),
+    })
+    bloomDepthTarget.depthTexture.format = THREE.DepthFormat
+    bloomDepthTarget.depthTexture.type = THREE.UnsignedShortType
     
     // Bloom scene - a separate scene containing only objects that should glow
     const bloomScene = new THREE.Scene()
@@ -198,12 +227,16 @@ export function useThreeScene(containerRef, geometryData) {
     bloomComposer.addPass(bloomPass)
     bloomComposerRef.current = bloomComposer
     
-    // Create a fullscreen quad for additive bloom compositing
+    // Create a fullscreen quad for depth-aware bloom compositing
     const bloomQuadGeo = new THREE.PlaneGeometry(2, 2)
     const bloomQuadMat = new THREE.ShaderMaterial({
       uniforms: { 
         bloomTexture: { value: null },
-        opacity: { value: PREVIEW_PANEL.bloomOpacity }
+        mainDepthTexture: { value: null },
+        bloomDepthTexture: { value: null },
+        opacity: { value: PREVIEW_PANEL.bloomOpacity },
+        cameraNear: { value: camera.near },
+        cameraFar: { value: camera.far }
       },
       vertexShader: `
         varying vec2 vUv;
@@ -214,11 +247,32 @@ export function useThreeScene(containerRef, geometryData) {
       `,
       fragmentShader: `
         uniform sampler2D bloomTexture;
+        uniform sampler2D mainDepthTexture;
+        uniform sampler2D bloomDepthTexture;
         uniform float opacity;
+        uniform float cameraNear;
+        uniform float cameraFar;
         varying vec2 vUv;
+        
+        float linearizeDepth(float depth) {
+          float z = depth * 2.0 - 1.0;
+          return (2.0 * cameraNear * cameraFar) / (cameraFar + cameraNear - z * (cameraFar - cameraNear));
+        }
+        
         void main() {
+          float mainDepth = texture2D(mainDepthTexture, vUv).r;
+          float bloomDepth = texture2D(bloomDepthTexture, vUv).r;
+          
+          // Linearize depths for comparison
+          float mainLinear = linearizeDepth(mainDepth);
+          float bloomLinear = linearizeDepth(bloomDepth);
+          
+          // Only show bloom where bloom objects are in front of (or at same depth as) main scene
+          // Add small bias to avoid z-fighting
+          float visible = step(bloomLinear, mainLinear + 0.01);
+          
           vec4 bloom = texture2D(bloomTexture, vUv);
-          gl_FragColor = bloom * opacity;
+          gl_FragColor = bloom * opacity * visible;
         }
       `,
       transparent: true,
@@ -237,6 +291,8 @@ export function useThreeScene(containerRef, geometryData) {
     scene.userData.bloomQuad = bloomQuad
     scene.userData.bloomQuadScene = bloomQuadScene
     scene.userData.bloomQuadCamera = bloomQuadCamera
+    scene.userData.mainRenderTarget = mainRenderTarget
+    scene.userData.bloomDepthTarget = bloomDepthTarget
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement)
@@ -340,7 +396,7 @@ export function useThreeScene(containerRef, geometryData) {
       const hasBloomObjects = previewMeshRef.current && previewMeshRef.current.visible
       
       if (hasBloomObjects) {
-        const { bloomScene, bloomComposer, bloomQuad, bloomQuadScene, bloomQuadCamera } = scene.userData
+        const { bloomScene, bloomComposer, bloomQuad, bloomQuadScene, bloomQuadCamera, mainRenderTarget, bloomDepthTarget } = scene.userData
         
         // Step 1: Copy bloom objects to bloom scene FIRST
         while (bloomScene.children.length > 0) {
@@ -368,16 +424,30 @@ export function useThreeScene(containerRef, geometryData) {
           }
         })
         
-        // Step 2: Render bloom pass to offscreen buffer
+        // Step 2: Render main scene to capture depth
+        renderer.setRenderTarget(mainRenderTarget)
+        renderer.render(scene, camera)
+        
+        // Step 3: Render bloom scene to capture its depth
+        renderer.setRenderTarget(bloomDepthTarget)
+        renderer.render(bloomScene, camera)
+        
+        // Step 4: Render bloom pass (glow effect)
+        renderer.setRenderTarget(null)
         bloomComposer.render()
         const bloomTexture = bloomComposer.readBuffer.texture
         
-        // Step 3: Render main scene to screen (clears the screen)
+        // Step 5: Render main scene to screen
         renderer.setRenderTarget(null)
         renderer.render(scene, camera)
         
-        // Step 4: Composite bloom on top with additive blending
+        // Step 6: Composite bloom with depth-aware masking
         bloomQuad.material.uniforms.bloomTexture.value = bloomTexture
+        bloomQuad.material.uniforms.mainDepthTexture.value = mainRenderTarget.depthTexture
+        bloomQuad.material.uniforms.bloomDepthTexture.value = bloomDepthTarget.depthTexture
+        bloomQuad.material.uniforms.cameraNear.value = camera.near
+        bloomQuad.material.uniforms.cameraFar.value = camera.far
+        
         renderer.autoClear = false
         renderer.render(bloomQuadScene, bloomQuadCamera)
         renderer.autoClear = true
@@ -398,6 +468,8 @@ export function useThreeScene(containerRef, geometryData) {
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
       scene.userData.bloomComposer?.setSize(w, h)
+      scene.userData.mainRenderTarget?.setSize(w, h)
+      scene.userData.bloomDepthTarget?.setSize(w, h)
       labelRenderer.setSize(w, h)
       // Update LineMaterial resolution for thick lines
       if (previewMeshRef.current) {
@@ -567,144 +639,145 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Create preview mesh if it doesn't exist
       if (!previewMeshRef.current) {
-        // Custom shader material for holographic effect with diagonal stripes
-        const holoMaterial = new THREE.ShaderMaterial({
-          uniforms: {
-            stripeColor1: { value: new THREE.Color(PREVIEW_PANEL.stripeColor1) },
-            stripeColor2: { value: new THREE.Color(PREVIEW_PANEL.stripeColor2) },
-            holoTint: { value: new THREE.Color(PREVIEW_PANEL.holoTint) },
-            stripeScale: { value: PREVIEW_PANEL.stripeScale },
-            scanlineScale: { value: PREVIEW_PANEL.scanlineScale },
-            scanlineIntensity: { value: PREVIEW_PANEL.scanlineIntensity },
-            gradientStart: { value: PREVIEW_PANEL.gradientStart },
-            gradientStrength: { value: PREVIEW_PANEL.gradientStrength },
-            opacity: { value: PREVIEW_PANEL.opacity },
-            meshScale: { value: new THREE.Vector3(1, 1, 1) }
-          },
-          vertexShader: `
-            uniform vec3 meshScale;
-            varying vec3 vWorldPosition;
-            varying vec3 vAnchoredPosition;
-            varying vec2 vUv;
-            varying vec3 vNormal;
-            void main() {
-              vUv = uv;
-              vNormal = normal;
-              // Get world position for consistent scanlines
-              vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
-              // Anchor diagonal stripes to start of box
-              vec3 anchored = position + vec3(0.5, 0.5, 0.125);
-              vAnchoredPosition = anchored * meshScale;
-              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-            }
-          `,
-          fragmentShader: `
-            uniform vec3 stripeColor1;
-            uniform vec3 stripeColor2;
-            uniform vec3 holoTint;
-            uniform float stripeScale;
-            uniform float scanlineScale;
-            uniform float scanlineIntensity;
-            uniform float gradientStart;
-            uniform float gradientStrength;
-            uniform float opacity;
-            varying vec3 vWorldPosition;
-            varying vec3 vAnchoredPosition;
-            varying vec2 vUv;
-            varying vec3 vNormal;
-            
-            // Overlay blend mode (like Photoshop)
-            vec3 blendOverlay(vec3 base, vec3 blend) {
-              return vec3(
-                base.r < 0.5 ? (2.0 * base.r * blend.r) : (1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r)),
-                base.g < 0.5 ? (2.0 * base.g * blend.g) : (1.0 - 2.0 * (1.0 - base.g) * (1.0 - blend.g)),
-                base.b < 0.5 ? (2.0 * base.b * blend.b) : (1.0 - 2.0 * (1.0 - base.b) * (1.0 - blend.b))
-              );
-            }
-            
-            void main() {
-              // Diagonal stripe pattern anchored to start point
-              float anchoredCoord = vAnchoredPosition.x + vAnchoredPosition.y + vAnchoredPosition.z;
-              float stripe = sin(anchoredCoord * stripeScale * 3.14159) * 0.5 + 0.5;
-              stripe = step(0.5, stripe);
-              
-              // Base color from stripes
-              vec3 color = mix(stripeColor2, stripeColor1, stripe * 0.7);
-              
-              // Prepare overlay color
-              vec3 overlayColor = blendOverlay(color, holoTint);
-              
-              // Determine face type from normal
-              float isTopFace = step(0.5, vNormal.y);      // Top face (normal.y > 0.5)
-              float isBottomFace = step(0.5, -vNormal.y);  // Bottom face (normal.y < -0.5)
-              
-              // Remap UV.y so gradient starts at gradientStart and ends at 1.0
-              float remappedY = clamp((vUv.y - gradientStart) / (1.0 - gradientStart), 0.0, 1.0);
-              
-              // Vertical gradient on front/back/end faces
-              // Top face gets full gradient endpoint, bottom face gets no gradient
-              float gradientAmount = mix(remappedY * gradientStrength, gradientStrength, isTopFace);
-              gradientAmount = mix(gradientAmount, 0.0, isBottomFace);
-              color = mix(color, overlayColor, gradientAmount);
-              
-              // Horizontal scanlines (world space Y for consistency)
-              float scanline = sin(vWorldPosition.y * scanlineScale) * 0.5 + 0.5;
-              scanline = smoothstep(0.3, 0.7, scanline);
-              color = mix(color, color * 0.75, scanline * scanlineIntensity);
-              
-              gl_FragColor = vec4(color, opacity);
-            }
-          `,
-          transparent: true,
-          side: THREE.FrontSide,
-          depthWrite: false
-        })
-        
-        // BoxGeometry(width, height, depth)
         const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
-        const previewMesh = new THREE.Mesh(previewGeo, holoMaterial)
+        let previewMesh
         
-        // Glowing edge outline using thick lines (LineSegments2) for proper antialiasing
-        // Box edges as separate line segments (pairs of points)
-        // Unit box is 1x1x0.25, centered at origin
-        const hw = 0.5, hh = 0.5, hd = 0.125  // half width, height, depth
-        const boxEdges = [
-          // Bottom face (4 edges)
-          -hw, -hh, -hd,  hw, -hh, -hd,
-           hw, -hh, -hd,  hw, -hh,  hd,
-           hw, -hh,  hd, -hw, -hh,  hd,
-          -hw, -hh,  hd, -hw, -hh, -hd,
-          // Top face (4 edges)
-          -hw,  hh, -hd,  hw,  hh, -hd,
-           hw,  hh, -hd,  hw,  hh,  hd,
-           hw,  hh,  hd, -hw,  hh,  hd,
-          -hw,  hh,  hd, -hw,  hh, -hd,
-          // Vertical edges (4 edges)
-          -hw, -hh, -hd, -hw,  hh, -hd,
-           hw, -hh, -hd,  hw,  hh, -hd,
-           hw, -hh,  hd,  hw,  hh,  hd,
-          -hw, -hh,  hd, -hw,  hh,  hd,
-        ]
-        
-        const lineGeo = new LineSegmentsGeometry()
-        lineGeo.setPositions(boxEdges)
-        
-        const lineMat = new LineMaterial({
-          color: new THREE.Color(PREVIEW_PANEL.wireframeColor).multiplyScalar(2.0),
-          linewidth: PREVIEW_PANEL.wireframeWidth,
-          opacity: PREVIEW_PANEL.wireframeOpacity,
-          toneMapped: false,
-          transparent: true,
-          depthTest: true,
-          depthWrite: false,
-        })
-        // LineMaterial needs resolution for proper width calculation
-        lineMat.resolution.set(window.innerWidth, window.innerHeight)
-        
-        const edgeLines = new LineSegments2(lineGeo, lineMat)
-        edgeLines.computeLineDistances()
-        edgeLines.layers.enable(BLOOM_LAYER)
-        previewMesh.add(edgeLines)
+        if (PREVIEW_PANEL.fancyPreview) {
+          // ====== FANCY MODE: Holographic with bloom wireframe ======
+          const holoMaterial = new THREE.ShaderMaterial({
+            uniforms: {
+              stripeColor1: { value: new THREE.Color(PREVIEW_PANEL.stripeColor1) },
+              stripeColor2: { value: new THREE.Color(PREVIEW_PANEL.stripeColor2) },
+              holoTint: { value: new THREE.Color(PREVIEW_PANEL.holoTint) },
+              stripeScale: { value: PREVIEW_PANEL.stripeScale },
+              scanlineScale: { value: PREVIEW_PANEL.scanlineScale },
+              scanlineIntensity: { value: PREVIEW_PANEL.scanlineIntensity },
+              gradientStart: { value: PREVIEW_PANEL.gradientStart },
+              gradientStrength: { value: PREVIEW_PANEL.gradientStrength },
+              opacity: { value: PREVIEW_PANEL.opacity },
+              meshScale: { value: new THREE.Vector3(1, 1, 1) }
+            },
+            vertexShader: `
+              uniform vec3 meshScale;
+              varying vec3 vWorldPosition;
+              varying vec3 vAnchoredPosition;
+              varying vec2 vUv;
+              varying vec3 vNormal;
+              void main() {
+                vUv = uv;
+                vNormal = normal;
+                vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
+                vec3 anchored = position + vec3(0.5, 0.5, 0.125);
+                vAnchoredPosition = anchored * meshScale;
+                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+              }
+            `,
+            fragmentShader: `
+              uniform vec3 stripeColor1;
+              uniform vec3 stripeColor2;
+              uniform vec3 holoTint;
+              uniform float stripeScale;
+              uniform float scanlineScale;
+              uniform float scanlineIntensity;
+              uniform float gradientStart;
+              uniform float gradientStrength;
+              uniform float opacity;
+              varying vec3 vWorldPosition;
+              varying vec3 vAnchoredPosition;
+              varying vec2 vUv;
+              varying vec3 vNormal;
+              
+              vec3 blendOverlay(vec3 base, vec3 blend) {
+                return vec3(
+                  base.r < 0.5 ? (2.0 * base.r * blend.r) : (1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r)),
+                  base.g < 0.5 ? (2.0 * base.g * blend.g) : (1.0 - 2.0 * (1.0 - base.g) * (1.0 - blend.g)),
+                  base.b < 0.5 ? (2.0 * base.b * blend.b) : (1.0 - 2.0 * (1.0 - base.b) * (1.0 - blend.b))
+                );
+              }
+              
+              void main() {
+                float anchoredCoord = vAnchoredPosition.x + vAnchoredPosition.y + vAnchoredPosition.z;
+                float stripe = sin(anchoredCoord * stripeScale * 3.14159) * 0.5 + 0.5;
+                stripe = step(0.5, stripe);
+                vec3 color = mix(stripeColor2, stripeColor1, stripe * 0.7);
+                vec3 overlayColor = blendOverlay(color, holoTint);
+                float isTopFace = step(0.5, vNormal.y);
+                float isBottomFace = step(0.5, -vNormal.y);
+                float remappedY = clamp((vUv.y - gradientStart) / (1.0 - gradientStart), 0.0, 1.0);
+                float gradientAmount = mix(remappedY * gradientStrength, gradientStrength, isTopFace);
+                gradientAmount = mix(gradientAmount, 0.0, isBottomFace);
+                color = mix(color, overlayColor, gradientAmount);
+                float scanline = sin(vWorldPosition.y * scanlineScale) * 0.5 + 0.5;
+                scanline = smoothstep(0.3, 0.7, scanline);
+                color = mix(color, color * 0.75, scanline * scanlineIntensity);
+                gl_FragColor = vec4(color, opacity);
+              }
+            `,
+            transparent: true,
+            side: THREE.FrontSide,
+            depthWrite: false
+          })
+          
+          previewMesh = new THREE.Mesh(previewGeo, holoMaterial)
+          
+          // Thick glowing wireframe with bloom
+          const hw = 0.5, hh = 0.5, hd = 0.125
+          const boxEdges = [
+            -hw, -hh, -hd,  hw, -hh, -hd,
+             hw, -hh, -hd,  hw, -hh,  hd,
+             hw, -hh,  hd, -hw, -hh,  hd,
+            -hw, -hh,  hd, -hw, -hh, -hd,
+            -hw,  hh, -hd,  hw,  hh, -hd,
+             hw,  hh, -hd,  hw,  hh,  hd,
+             hw,  hh,  hd, -hw,  hh,  hd,
+            -hw,  hh,  hd, -hw,  hh, -hd,
+            -hw, -hh, -hd, -hw,  hh, -hd,
+             hw, -hh, -hd,  hw,  hh, -hd,
+             hw, -hh,  hd,  hw,  hh,  hd,
+            -hw, -hh,  hd, -hw,  hh,  hd,
+          ]
+          
+          const lineGeo = new LineSegmentsGeometry()
+          lineGeo.setPositions(boxEdges)
+          
+          const lineMat = new LineMaterial({
+            color: new THREE.Color(PREVIEW_PANEL.wireframeColor).multiplyScalar(2.0),
+            linewidth: PREVIEW_PANEL.wireframeWidth,
+            opacity: PREVIEW_PANEL.wireframeOpacity,
+            toneMapped: false,
+            transparent: true,
+            depthTest: true,
+            depthWrite: false,
+          })
+          lineMat.resolution.set(window.innerWidth, window.innerHeight)
+          
+          const edgeLines = new LineSegments2(lineGeo, lineMat)
+          edgeLines.computeLineDistances()
+          edgeLines.layers.enable(BLOOM_LAYER)
+          previewMesh.add(edgeLines)
+          
+        } else {
+          // ====== SIMPLE MODE: Solid translucent orange with basic wireframe ======
+          const simpleMaterial = new THREE.MeshBasicMaterial({
+            color: PREVIEW_PANEL.simpleColor,
+            transparent: true,
+            opacity: PREVIEW_PANEL.simpleOpacity,
+            side: THREE.FrontSide,
+            depthWrite: false
+          })
+          
+          previewMesh = new THREE.Mesh(previewGeo, simpleMaterial)
+          
+          // Simple wireframe using EdgesGeometry
+          const edgesGeo = new THREE.EdgesGeometry(previewGeo)
+          const edgesMat = new THREE.LineBasicMaterial({
+            color: PREVIEW_PANEL.simpleWireframeColor,
+            transparent: true,
+            opacity: 0.8
+          })
+          const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat)
+          previewMesh.add(edgeLines)
+        }
         
         previewMeshRef.current = previewMesh
         scene.add(previewMeshRef.current)
@@ -712,8 +785,10 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Update preview mesh
       previewMeshRef.current.scale.set(width, 1, 1)
-      // Update shader uniform with current scale
-      previewMeshRef.current.material.uniforms.meshScale.value.set(width, 1, 1)
+      // Update shader uniform with current scale (only for fancy mode)
+      if (PREVIEW_PANEL.fancyPreview && previewMeshRef.current.material.uniforms) {
+        previewMeshRef.current.material.uniforms.meshScale.value.set(width, 1, 1)
+      }
       // Position centered on the endpoint (which is already at mid-height)
       previewMeshRef.current.position.set(cx, endpoint.y, cz)
       
@@ -722,7 +797,7 @@ export function useThreeScene(containerRef, geometryData) {
       previewMeshRef.current.rotation.set(0, -angle, 0)
       previewMeshRef.current.visible = true
       
-      // Show a marker at the endpoint we're building from (orange glow)
+      // Show a marker at the endpoint we're building from
       if (previewPointsRef.current.length === 0) {
         const markerGeo = new THREE.SphereGeometry(0.06, 16, 16)
         const markerMat = new THREE.MeshBasicMaterial({ 
@@ -732,7 +807,10 @@ export function useThreeScene(containerRef, geometryData) {
         })
         const marker = new THREE.Mesh(markerGeo, markerMat)
         marker.position.set(endpoint.x, endpoint.y, endpoint.z)
-        marker.layers.enable(BLOOM_LAYER)  // Add glow to marker
+        // Only add bloom to marker in fancy mode
+        if (PREVIEW_PANEL.fancyPreview) {
+          marker.layers.enable(BLOOM_LAYER)
+        }
         scene.add(marker)
         previewPointsRef.current.push(marker)
       } else {
