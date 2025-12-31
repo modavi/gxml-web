@@ -1,0 +1,16 @@
+{
+	"folders": [
+		{
+			"name": "gxml",
+			"path": "../../gxml"
+		},
+		{
+			"name": "gxml-web",
+			"path": ".."
+		}
+	],
+	"settings": {
+		"python.defaultInterpreterPath": "${workspaceFolder:gxml}/venv/bin/python",
+		"python.testing.pytestEnabled": true
+	}
+}

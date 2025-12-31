@@ -12,54 +12,43 @@ import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2'
 import { useViewportStore } from '../stores/viewportStore'
 import { useAppStore } from '../stores/appStore'
 
-// Bloom layer - objects on this layer will glow
-const BLOOM_LAYER = 1
+// Import modular utilities from ./three/
+import {
+  BLOOM_LAYER,
+  PREVIEW_PANEL,
+  COLORS,
+  clearGroup,
+  createPolygonMesh,
+  createLabels,
+  createVertexMarkers,
+  applySelectionHighlight,
+  applyHoverHighlight,
+  resetToBaseColor,
+  PreviewBrush,
+} from './three'
 
 // ============================================
-// Creation Mode Preview Panel Settings
+// useThreeScene Hook
 // ============================================
-const PREVIEW_PANEL = {
-  // Style toggle - set to false for simple solid orange preview
-  fancyPreview: true,
-  
-  // Simple style settings (when fancyPreview = false)
-  simpleColor: 0xff8844,       // Solid orange color
-  simpleOpacity: 0.4,          // Panel transparency
-  simpleWireframeColor: 0xffaa00, // Wireframe color
-  
-  // Fancy style settings (when fancyPreview = true)
-  // Colors
-  stripeColor1: 0xffaa55,      // Light stripe color
-  stripeColor2: 0xdd9944,      // Dark stripe color
-  holoTint: 0xffffff,          // Holographic cyan tint
-  wireframeColor: 0xffaa44,    // Wireframe edge color
-  
-  // Stripe settings
-  stripeScale: 6.0,            // Diagonal stripe density
-  
-  // Scanline settings
-  scanlineScale: 200.0,        // Scanline density (higher = smaller)
-  scanlineIntensity: 0.32,     // How visible scanlines are (0-1)
-  
-  // Holographic settings
-  gradientStart: 0.3,          // Where gradient starts (0 = bottom, 1 = top)
-  gradientStrength: 0.7,      // Vertical gradient strength (0-1)
-  
-  // Bloom settings for wireframe glow
-  bloomStrength: 0.55,          // Glow intensity
-  bloomRadius: 0.1,            // Glow spread
-  bloomThreshold: 0.0,         // Brightness threshold
-  bloomOpacity: 1.0,           // Bloom overlay opacity (0-1)
-  
-  // Wireframe settings
-  wireframeWidth: 3.0,         // Line width in pixels
-  wireframeOpacity: 0.18,       // Wireframe line opacity (0-1)
-  
-  // Overall
-  opacity: 0.55,               // Panel transparency
-}
+// Main hook for managing the Three.js viewport scene.
+// 
+// Structure:
+// 1. Refs & Store Subscriptions
+// 2. Creation Mode Effects
+// 3. Scene Initialization (useEffect)
+//    - Scene, Camera, Renderer setup
+//    - Bloom post-processing pipeline
+//    - Controls & event handlers
+//    - Animation loop
+// 4. Geometry Update Effects
+// 5. Selection & Hover Effects
+// 6. Exported Methods
+// ============================================
 
 export function useThreeScene(containerRef, geometryData) {
+  // ============================================
+  // Refs
+  // ============================================
   const sceneRef = useRef(null)
   const cameraRef = useRef(null)
   const rendererRef = useRef(null)
@@ -79,10 +68,12 @@ export function useThreeScene(containerRef, geometryData) {
   const hoverRef = useRef({ hoveredFaceId: null, hoveredVertexIdx: null, hoveredElementId: null })
   
   // Creation mode refs
-  const previewMeshRef = useRef(null)
-  const previewPointsRef = useRef([])  // Visual markers for placed points
+  const previewBrushRef = useRef(null)  // PreviewBrush instance
   const xyPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0))  // XY plane at z=0
 
+  // ============================================
+  // Store Subscriptions
+  // ============================================
   const {
     viewMode,
     colorMode,
@@ -110,6 +101,9 @@ export function useThreeScene(containerRef, geometryData) {
   const creationMode = useViewportStore((state) => state.creationMode)
   const panelChain = useViewportStore((state) => state.panelChain)
 
+  // ============================================
+  // Settings Sync Effects
+  // ============================================
   // Keep settings ref in sync
   useEffect(() => {
     settingsRef.current = { showFaceLabels, hideOccludedLabels }
@@ -124,40 +118,23 @@ export function useThreeScene(containerRef, geometryData) {
     }
   }, [showFaceLabels, hideOccludedLabels])
   
-  // Clean up preview markers when chain changes or creation mode is disabled
+  // ============================================
+  // Creation Mode Effects
+  // ============================================
+  // Clean up preview when creation mode is disabled
   useEffect(() => {
-    const scene = sceneRef.current
-    if (!scene) return
-    
-    // If creation mode is off or chain is empty, clear preview markers
     if (!creationMode || panelChain.length === 0) {
-      // Remove preview mesh
-      if (previewMeshRef.current) {
-        scene.remove(previewMeshRef.current)
-        previewMeshRef.current.geometry?.dispose()
-        previewMeshRef.current.material?.dispose()
-        previewMeshRef.current = null
+      // Dispose preview brush when exiting creation mode
+      if (previewBrushRef.current) {
+        previewBrushRef.current.dispose()
+        previewBrushRef.current = null
       }
-      
-      // Remove point markers
-      previewPointsRef.current.forEach(marker => {
-        scene.remove(marker)
-        marker.geometry?.dispose()
-        marker.material?.dispose()
-      })
-      previewPointsRef.current = []
-    }
-    
-    // When chain shrinks (undo), remove extra markers
-    while (previewPointsRef.current.length > panelChain.length) {
-      const marker = previewPointsRef.current.pop()
-      scene.remove(marker)
-      marker.geometry?.dispose()
-      marker.material?.dispose()
     }
   }, [creationMode, panelChain.length])
 
-  // Initialize scene
+  // ============================================
+  // Scene Initialization
+  // ============================================
   useEffect(() => {
     const container = containerRef.current
     if (!container) return
@@ -165,17 +142,17 @@ export function useThreeScene(containerRef, geometryData) {
     const width = container.clientWidth
     const height = container.clientHeight
 
-    // Scene - Blender-style dark gray background
+    // --------------------------------------------
+    // Scene, Camera, Renderer Setup
+    // --------------------------------------------
     const scene = new THREE.Scene()
-    scene.background = new THREE.Color(0x282828)
+    scene.background = new THREE.Color(COLORS.background)
     sceneRef.current = scene
 
-    // Camera
     const camera = new THREE.PerspectiveCamera(45, width / height, 0.1, 10000)
     camera.position.set(3, 2, 4)
     cameraRef.current = camera
 
-    // Renderer
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(width, height)
     renderer.setPixelRatio(window.devicePixelRatio)
@@ -321,7 +298,9 @@ export function useThreeScene(containerRef, geometryData) {
     const axesHelper = new THREE.AxesHelper(0.4)
     scene.add(axesHelper)
 
-    // Groups
+    // --------------------------------------------
+    // Scene Groups
+    // --------------------------------------------
     const geometryGroup = new THREE.Group()
     scene.add(geometryGroup)
     geometryGroupRef.current = geometryGroup
@@ -334,7 +313,9 @@ export function useThreeScene(containerRef, geometryData) {
     scene.add(vertexGroup)
     vertexGroupRef.current = vertexGroup
 
-    // CSS2D Renderer for labels
+    // --------------------------------------------
+    // CSS2D Label Renderer
+    // --------------------------------------------
     const labelRenderer = new CSS2DRenderer()
     labelRenderer.setSize(width, height)
     labelRenderer.domElement.style.position = 'absolute'
@@ -343,7 +324,9 @@ export function useThreeScene(containerRef, geometryData) {
     container.appendChild(labelRenderer.domElement)
     labelRendererRef.current = labelRenderer
 
-    // Occlusion culling for labels
+    // --------------------------------------------
+    // Label Occlusion Culling
+    // --------------------------------------------
     const updateLabelOcclusion = () => {
       const labelGroup = labelGroupRef.current
       const geometryGroup = geometryGroupRef.current
@@ -382,7 +365,9 @@ export function useThreeScene(containerRef, geometryData) {
       })
     }
 
-    // Animation loop
+    // --------------------------------------------
+    // Animation Loop
+    // --------------------------------------------
     const animate = () => {
       animationFrameRef.current = requestAnimationFrame(animate)
       controls.update()
@@ -393,7 +378,8 @@ export function useThreeScene(containerRef, geometryData) {
       }
       
       // Check if we have any bloom objects (creation mode preview)
-      const hasBloomObjects = previewMeshRef.current && previewMeshRef.current.visible
+      const previewBrush = previewBrushRef.current
+      const hasBloomObjects = previewBrush?.visible
       
       if (hasBloomObjects) {
         const { bloomScene, bloomComposer, bloomQuad, bloomQuadScene, bloomQuadCamera, mainRenderTarget, bloomDepthTarget } = scene.userData
@@ -404,8 +390,9 @@ export function useThreeScene(containerRef, geometryData) {
         }
         
         // Clone wireframe and markers with world transforms
-        if (previewMeshRef.current) {
-          previewMeshRef.current.traverse((child) => {
+        const previewMesh = previewBrush.getMesh()
+        if (previewMesh) {
+          previewMesh.traverse((child) => {
             if (child.layers.isEnabled(BLOOM_LAYER)) {
               const temp = child.clone()
               child.getWorldPosition(temp.position)
@@ -416,7 +403,7 @@ export function useThreeScene(containerRef, geometryData) {
           })
         }
         
-        previewPointsRef.current.forEach(marker => {
+        previewBrush.getMarkers().forEach(marker => {
           if (marker.layers.isEnabled(BLOOM_LAYER)) {
             const temp = marker.clone()
             marker.getWorldPosition(temp.position)
@@ -460,7 +447,9 @@ export function useThreeScene(containerRef, geometryData) {
     }
     animate()
 
-    // Handle resize
+    // --------------------------------------------
+    // Resize Handler
+    // --------------------------------------------
     const handleResize = () => {
       const w = container.clientWidth
       const h = container.clientHeight
@@ -471,18 +460,14 @@ export function useThreeScene(containerRef, geometryData) {
       scene.userData.mainRenderTarget?.setSize(w, h)
       scene.userData.bloomDepthTarget?.setSize(w, h)
       labelRenderer.setSize(w, h)
-      // Update LineMaterial resolution for thick lines
-      if (previewMeshRef.current) {
-        previewMeshRef.current.traverse((child) => {
-          if (child.material && child.material.resolution) {
-            child.material.resolution.set(w, h)
-          }
-        })
-      }
+      // Update LineMaterial resolution for preview brush
+      previewBrushRef.current?.updateResolution(w, h)
     }
     window.addEventListener('resize', handleResize)
 
-    // Setup face picking
+    // --------------------------------------------
+    // Mouse Event Handlers
+    // --------------------------------------------
     const handleMouseMove = (e) => {
       const rect = renderer.domElement.getBoundingClientRect()
       mouseRef.current.x = ((e.clientX - rect.left) / rect.width) * 2 - 1
@@ -501,9 +486,7 @@ export function useThreeScene(containerRef, geometryData) {
     const handleMouseLeave = () => {
       resetHover()
       // Hide preview when mouse leaves
-      if (previewMeshRef.current) {
-        previewMeshRef.current.visible = false
-      }
+      previewBrushRef.current?.hide()
     }
     
     // Track if user is dragging (rotating/panning) vs clicking
@@ -601,224 +584,28 @@ export function useThreeScene(containerRef, geometryData) {
     
     // Helper: Create or update preview panel (emerges from selected panel endpoint)
     const updateCreationPreview = () => {
-      const viewportStore = useViewportStore.getState()
       const endpoint = getSelectedPanelEndpoint()
       
       // Must have a selected panel to create from
       if (!endpoint) {
-        if (previewMeshRef.current) previewMeshRef.current.visible = false
+        previewBrushRef.current?.hide()
         return
       }
       
       // Use XZ plane (floor) for creation - panels rotate around Y axis
       const mousePoint = raycastToXZPlane()
       if (!mousePoint) {
-        if (previewMeshRef.current) previewMeshRef.current.visible = false
+        previewBrushRef.current?.hide()
         return
       }
       
-      // Calculate in XZ plane (horizontal floor)
-      const dx = mousePoint.x - endpoint.x
-      const dz = mousePoint.z - endpoint.z
-      const width = Math.sqrt(dx * dx + dz * dz)
-      
-      // Don't show preview for very short panels
-      if (width < 0.05) {
-        if (previewMeshRef.current) previewMeshRef.current.visible = false
-        return
+      // Initialize PreviewBrush if needed
+      if (!previewBrushRef.current) {
+        previewBrushRef.current = new PreviewBrush(scene)
       }
       
-      // Angle in XZ plane - atan2(dz, dx) for rotation around Y
-      const angle = Math.atan2(dz, dx)
-      
-      // Position the panel center offset from the endpoint (pivot point)
-      // Panel swings around the endpoint like a hinged door
-      // Center is at endpoint + half-width in the direction of the panel
-      const cx = endpoint.x + (width / 2) * Math.cos(angle)
-      const cz = endpoint.z + (width / 2) * Math.sin(angle)
-      
-      // Create preview mesh if it doesn't exist
-      if (!previewMeshRef.current) {
-        const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
-        let previewMesh
-        
-        if (PREVIEW_PANEL.fancyPreview) {
-          // ====== FANCY MODE: Holographic with bloom wireframe ======
-          const holoMaterial = new THREE.ShaderMaterial({
-            uniforms: {
-              stripeColor1: { value: new THREE.Color(PREVIEW_PANEL.stripeColor1) },
-              stripeColor2: { value: new THREE.Color(PREVIEW_PANEL.stripeColor2) },
-              holoTint: { value: new THREE.Color(PREVIEW_PANEL.holoTint) },
-              stripeScale: { value: PREVIEW_PANEL.stripeScale },
-              scanlineScale: { value: PREVIEW_PANEL.scanlineScale },
-              scanlineIntensity: { value: PREVIEW_PANEL.scanlineIntensity },
-              gradientStart: { value: PREVIEW_PANEL.gradientStart },
-              gradientStrength: { value: PREVIEW_PANEL.gradientStrength },
-              opacity: { value: PREVIEW_PANEL.opacity },
-              meshScale: { value: new THREE.Vector3(1, 1, 1) }
-            },
-            vertexShader: `
-              uniform vec3 meshScale;
-              varying vec3 vWorldPosition;
-              varying vec3 vAnchoredPosition;
-              varying vec2 vUv;
-              varying vec3 vNormal;
-              void main() {
-                vUv = uv;
-                vNormal = normal;
-                vWorldPosition = (modelMatrix * vec4(position, 1.0)).xyz;
-                vec3 anchored = position + vec3(0.5, 0.5, 0.125);
-                vAnchoredPosition = anchored * meshScale;
-                gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
-              }
-            `,
-            fragmentShader: `
-              uniform vec3 stripeColor1;
-              uniform vec3 stripeColor2;
-              uniform vec3 holoTint;
-              uniform float stripeScale;
-              uniform float scanlineScale;
-              uniform float scanlineIntensity;
-              uniform float gradientStart;
-              uniform float gradientStrength;
-              uniform float opacity;
-              varying vec3 vWorldPosition;
-              varying vec3 vAnchoredPosition;
-              varying vec2 vUv;
-              varying vec3 vNormal;
-              
-              vec3 blendOverlay(vec3 base, vec3 blend) {
-                return vec3(
-                  base.r < 0.5 ? (2.0 * base.r * blend.r) : (1.0 - 2.0 * (1.0 - base.r) * (1.0 - blend.r)),
-                  base.g < 0.5 ? (2.0 * base.g * blend.g) : (1.0 - 2.0 * (1.0 - base.g) * (1.0 - blend.g)),
-                  base.b < 0.5 ? (2.0 * base.b * blend.b) : (1.0 - 2.0 * (1.0 - base.b) * (1.0 - blend.b))
-                );
-              }
-              
-              void main() {
-                float anchoredCoord = vAnchoredPosition.x + vAnchoredPosition.y + vAnchoredPosition.z;
-                float stripe = sin(anchoredCoord * stripeScale * 3.14159) * 0.5 + 0.5;
-                stripe = step(0.5, stripe);
-                vec3 color = mix(stripeColor2, stripeColor1, stripe * 0.7);
-                vec3 overlayColor = blendOverlay(color, holoTint);
-                float isTopFace = step(0.5, vNormal.y);
-                float isBottomFace = step(0.5, -vNormal.y);
-                float remappedY = clamp((vUv.y - gradientStart) / (1.0 - gradientStart), 0.0, 1.0);
-                float gradientAmount = mix(remappedY * gradientStrength, gradientStrength, isTopFace);
-                gradientAmount = mix(gradientAmount, 0.0, isBottomFace);
-                color = mix(color, overlayColor, gradientAmount);
-                float scanline = sin(vWorldPosition.y * scanlineScale) * 0.5 + 0.5;
-                scanline = smoothstep(0.3, 0.7, scanline);
-                color = mix(color, color * 0.75, scanline * scanlineIntensity);
-                gl_FragColor = vec4(color, opacity);
-              }
-            `,
-            transparent: true,
-            side: THREE.FrontSide,
-            depthWrite: false
-          })
-          
-          previewMesh = new THREE.Mesh(previewGeo, holoMaterial)
-          
-          // Thick glowing wireframe with bloom
-          const hw = 0.5, hh = 0.5, hd = 0.125
-          const boxEdges = [
-            -hw, -hh, -hd,  hw, -hh, -hd,
-             hw, -hh, -hd,  hw, -hh,  hd,
-             hw, -hh,  hd, -hw, -hh,  hd,
-            -hw, -hh,  hd, -hw, -hh, -hd,
-            -hw,  hh, -hd,  hw,  hh, -hd,
-             hw,  hh, -hd,  hw,  hh,  hd,
-             hw,  hh,  hd, -hw,  hh,  hd,
-            -hw,  hh,  hd, -hw,  hh, -hd,
-            -hw, -hh, -hd, -hw,  hh, -hd,
-             hw, -hh, -hd,  hw,  hh, -hd,
-             hw, -hh,  hd,  hw,  hh,  hd,
-            -hw, -hh,  hd, -hw,  hh,  hd,
-          ]
-          
-          const lineGeo = new LineSegmentsGeometry()
-          lineGeo.setPositions(boxEdges)
-          
-          const lineMat = new LineMaterial({
-            color: new THREE.Color(PREVIEW_PANEL.wireframeColor).multiplyScalar(2.0),
-            linewidth: PREVIEW_PANEL.wireframeWidth,
-            opacity: PREVIEW_PANEL.wireframeOpacity,
-            toneMapped: false,
-            transparent: true,
-            depthTest: true,
-            depthWrite: false,
-          })
-          lineMat.resolution.set(window.innerWidth, window.innerHeight)
-          
-          const edgeLines = new LineSegments2(lineGeo, lineMat)
-          edgeLines.computeLineDistances()
-          edgeLines.layers.enable(BLOOM_LAYER)
-          previewMesh.add(edgeLines)
-          
-        } else {
-          // ====== SIMPLE MODE: Solid translucent orange with basic wireframe ======
-          const simpleMaterial = new THREE.MeshBasicMaterial({
-            color: PREVIEW_PANEL.simpleColor,
-            transparent: true,
-            opacity: PREVIEW_PANEL.simpleOpacity,
-            side: THREE.FrontSide,
-            depthWrite: false
-          })
-          
-          previewMesh = new THREE.Mesh(previewGeo, simpleMaterial)
-          
-          // Simple wireframe using EdgesGeometry
-          const edgesGeo = new THREE.EdgesGeometry(previewGeo)
-          const edgesMat = new THREE.LineBasicMaterial({
-            color: PREVIEW_PANEL.simpleWireframeColor,
-            transparent: true,
-            opacity: 0.8
-          })
-          const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat)
-          previewMesh.add(edgeLines)
-        }
-        
-        previewMeshRef.current = previewMesh
-        scene.add(previewMeshRef.current)
-      }
-      
-      // Update preview mesh
-      previewMeshRef.current.scale.set(width, 1, 1)
-      // Update shader uniform with current scale (only for fancy mode)
-      if (PREVIEW_PANEL.fancyPreview && previewMeshRef.current.material.uniforms) {
-        previewMeshRef.current.material.uniforms.meshScale.value.set(width, 1, 1)
-      }
-      // Position centered on the endpoint (which is already at mid-height)
-      previewMeshRef.current.position.set(cx, endpoint.y, cz)
-      
-      // Rotate around Y axis - panel swings in XZ plane
-      // Negate because Three.js Y rotation is counterclockwise when looking down
-      previewMeshRef.current.rotation.set(0, -angle, 0)
-      previewMeshRef.current.visible = true
-      
-      // Show a marker at the endpoint we're building from
-      if (previewPointsRef.current.length === 0) {
-        const markerGeo = new THREE.SphereGeometry(0.06, 16, 16)
-        const markerMat = new THREE.MeshBasicMaterial({ 
-          color: 0xff8800,
-          transparent: true,
-          opacity: 0.9
-        })
-        const marker = new THREE.Mesh(markerGeo, markerMat)
-        marker.position.set(endpoint.x, endpoint.y, endpoint.z)
-        // Only add bloom to marker in fancy mode
-        if (PREVIEW_PANEL.fancyPreview) {
-          marker.layers.enable(BLOOM_LAYER)
-        }
-        scene.add(marker)
-        previewPointsRef.current.push(marker)
-      } else {
-        // Update marker positions in case selection changed
-        previewPointsRef.current.forEach(marker => {
-          marker.position.set(endpoint.x, endpoint.y, endpoint.z)
-        })
-      }
+      // Update preview with current endpoint and mouse position
+      previewBrushRef.current.update(endpoint, mousePoint)
     }
     
     // Click handler for selection OR creation
@@ -862,13 +649,10 @@ export function useThreeScene(containerRef, geometryData) {
             .then((newPanelIndex) => {
               if (newPanelIndex !== null) {
                 // Clear the preview marker so it gets recreated at new position
-                previewPointsRef.current.forEach(m => scene.remove(m))
-                previewPointsRef.current = []
+                previewBrushRef.current?.clearMarkers()
                 
                 // Hide the preview mesh until mouse moves again
-                if (previewMeshRef.current) {
-                  previewMeshRef.current.visible = false
-                }
+                previewBrushRef.current?.hide()
                 
                 // Select the newly created panel - geometry is now ready
                 viewportStore.setSelectedElement(newPanelIndex)
@@ -1471,200 +1255,4 @@ export function useThreeScene(containerRef, geometryData) {
   }, [])
 
   return { resetView }
-}
-
-// Helper functions
-function clearGroup(group) {
-  if (!group) return
-  while (group.children.length > 0) {
-    const child = group.children[0]
-    if (child.geometry) child.geometry.dispose()
-    if (child.material) {
-      if (Array.isArray(child.material)) {
-        child.material.forEach((m) => m.dispose())
-      } else {
-        child.material.dispose()
-      }
-    }
-    if (child.element) {
-      child.element.remove()
-    }
-    group.remove(child)
-  }
-}
-
-function createPolygonMesh(panel, viewMode, colorMode) {
-  const { points, color, id } = panel
-  
-  if (!points || points.length < 3) return null
-  
-  // Extract panel index from face id (e.g., "0-front" -> "0", "1-None" -> "1")
-  // Keep as string for consistent comparison with store's selectedElementId
-  const panelId = id ? id.split('-')[0] : null
-  
-  const geometry = new THREE.BufferGeometry()
-  
-  const vertices = []
-  for (const p of points) {
-    vertices.push(p[0], p[1], p[2] || 0)
-  }
-  
-  const indices = []
-  for (let i = 1; i < points.length - 1; i++) {
-    indices.push(0, i, i + 1)
-    indices.push(0, i + 1, i)
-  }
-  
-  geometry.setAttribute('position', new THREE.Float32BufferAttribute(vertices, 3))
-  geometry.setIndex(indices)
-  geometry.computeVertexNormals()
-  
-  let materialColor
-  if (colorMode === 'uniform') {
-    materialColor = new THREE.Color(0x888888)
-  } else {
-    materialColor = color ? new THREE.Color(color) : new THREE.Color(0x888888)
-  }
-  
-  let material
-  if (viewMode === 'lit') {
-    material = new THREE.MeshPhongMaterial({
-      color: materialColor,
-      flatShading: true,
-      side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    })
-  } else if (viewMode === 'unlit') {
-    material = new THREE.MeshBasicMaterial({
-      color: materialColor,
-      side: THREE.DoubleSide,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    })
-  } else if (viewMode === 'xray') {
-    material = new THREE.MeshBasicMaterial({
-      color: materialColor,
-      side: THREE.DoubleSide,
-      transparent: true,
-      opacity: 0.3,
-      depthWrite: false,
-      polygonOffset: true,
-      polygonOffsetFactor: 1,
-      polygonOffsetUnits: 1,
-    })
-  } else {
-    material = new THREE.MeshBasicMaterial({ visible: false })
-  }
-  
-  const mesh = new THREE.Mesh(geometry, material)
-  mesh.userData.isFill = true
-  mesh.userData.baseColor = materialColor
-  mesh.userData.panelId = panelId  // Numeric panel index for element selection
-  mesh.userData.faceId = id        // Full face ID (e.g., "0-front")
-  
-  // Edge lines - visible outline on all faces
-  const edgeVertices = []
-  for (let i = 0; i < points.length; i++) {
-    const p1 = points[i]
-    const p2 = points[(i + 1) % points.length]
-    edgeVertices.push(p1[0], p1[1], p1[2] || 0)
-    edgeVertices.push(p2[0], p2[1], p2[2] || 0)
-  }
-  
-  const edgeGeometry = new THREE.BufferGeometry()
-  edgeGeometry.setAttribute('position', new THREE.Float32BufferAttribute(edgeVertices, 3))
-  
-  let edgeColor, edgeOpacity
-  if (viewMode === 'wireframe') {
-    edgeColor = materialColor
-    edgeOpacity = 1.0
-  } else if (viewMode === 'xray') {
-    edgeColor = 0x000000
-    edgeOpacity = 0.3
-  } else {
-    // Lit/Unlit - show dark edges for face boundaries
-    edgeColor = 0x1a1a1a
-    edgeOpacity = 1.0
-  }
-  
-  const edgeMaterial = new THREE.LineBasicMaterial({
-    color: edgeColor,
-    opacity: edgeOpacity,
-    transparent: edgeOpacity < 1.0,
-  })
-  
-  const edgeLines = new THREE.LineSegments(edgeGeometry, edgeMaterial)
-  edgeLines.userData.isEdge = true
-  edgeLines.userData.baseColor = materialColor
-  mesh.add(edgeLines)
-  
-  return mesh
-}
-
-function createLabels(geometryData, labelGroup) {
-  geometryData.panels.forEach((panel, idx) => {
-    if (!panel.points || panel.points.length < 3) return
-    
-    let cx = 0, cy = 0, cz = 0
-    panel.points.forEach((p) => {
-      cx += p[0]
-      cy += p[1]
-      cz += p[2] || 0
-    })
-    cx /= panel.points.length
-    cy /= panel.points.length
-    cz /= panel.points.length
-    
-    const labelDiv = document.createElement('div')
-    labelDiv.className = 'face-label'
-    labelDiv.textContent = panel.id || `face_${idx}`
-    
-    const label = new CSS2DObject(labelDiv)
-    label.position.set(cx, cy, cz)
-    labelGroup.add(label)
-  })
-}
-
-function createVertexMarkers(geometryData, vertexGroup, visible = true, scale = 1.0) {
-  const uniqueVertices = []
-  const vertexMap = new Map()
-  const TOLERANCE = 0.0001
-  
-  const hashVertex = (x, y, z) => {
-    const rx = Math.round(x / TOLERANCE) * TOLERANCE
-    const ry = Math.round(y / TOLERANCE) * TOLERANCE
-    const rz = Math.round(z / TOLERANCE) * TOLERANCE
-    return `${rx.toFixed(4)},${ry.toFixed(4)},${rz.toFixed(4)}`
-  }
-  
-  let globalIdx = 0
-  geometryData.panels.forEach((panel) => {
-    if (!panel.points) return
-    panel.points.forEach((p) => {
-      const hash = hashVertex(p[0], p[1], p[2] || 0)
-      if (!vertexMap.has(hash)) {
-        vertexMap.set(hash, globalIdx)
-        uniqueVertices.push({ x: p[0], y: p[1], z: p[2] || 0, index: globalIdx })
-        globalIdx++
-      }
-    })
-  })
-  
-  const baseSize = 0.02 * scale
-  const sphereGeometry = new THREE.SphereGeometry(baseSize, 8, 8)
-  const sphereMaterial = new THREE.MeshBasicMaterial({ color: 0x00ffff })
-  
-  uniqueVertices.forEach((v) => {
-    const sphere = new THREE.Mesh(sphereGeometry.clone(), sphereMaterial.clone())
-    sphere.position.set(v.x, v.y, v.z)
-    sphere.userData.isVertex = true
-    sphere.userData.vertexIndex = v.index
-    sphere.userData.baseColor = new THREE.Color(0x00ffff)
-    sphere.userData.baseScale = scale  // Store base scale for selection/hover
-    sphere.visible = visible  // Control visibility
-    vertexGroup.add(sphere)
-  })
 }
