@@ -398,25 +398,66 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Create preview mesh if it doesn't exist
       if (!previewMeshRef.current) {
-        // BoxGeometry(width, height, depth)
-        // X = panel length (will be scaled)
-        // Y = panel height (1 unit tall)
-        // Z = panel thickness
-        const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
-        const previewMat = new THREE.MeshBasicMaterial({
-          color: 0xed5700,
+        // Custom shader material for diagonal stripes with glow effect
+        const stripeMaterial = new THREE.ShaderMaterial({
+          uniforms: {
+            color1: { value: new THREE.Color(0xffaa55) },  // Light orange
+            color2: { value: new THREE.Color(0xdd9944) },  // Very slightly darker orange
+            stripeScale: { value: 6.0 },
+            opacity: { value: 0.6 },
+            meshScale: { value: new THREE.Vector3(1, 1, 1) }
+          },
+          vertexShader: `
+            uniform vec3 meshScale;
+            varying vec2 vUv;
+            varying vec3 vAnchoredPosition;
+            void main() {
+              vUv = uv;
+              // Anchor pattern to start of box (x = -0.5 in local coords becomes 0)
+              // This way pattern expands from the start point as panel lengthens
+              vec3 anchored = position + vec3(0.5, 0.5, 0.125); // offset to corner
+              vAnchoredPosition = anchored * meshScale;
+              gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+            }
+          `,
+          fragmentShader: `
+            uniform vec3 color1;
+            uniform vec3 color2;
+            uniform float stripeScale;
+            uniform float opacity;
+            varying vec2 vUv;
+            varying vec3 vAnchoredPosition;
+            
+            void main() {
+              // Diagonal stripe pattern anchored to start point
+              float anchoredCoord = vAnchoredPosition.x + vAnchoredPosition.y + vAnchoredPosition.z;
+              float stripe = sin(anchoredCoord * stripeScale * 3.14159) * 0.5 + 0.5;
+              stripe = step(0.5, stripe);
+              
+              // Mix colors based on stripe
+              vec3 color = mix(color2, color1, stripe * 0.7);
+              
+              // Add edge glow effect (still use UVs for edge detection)
+              float edgeGlow = 1.0 - smoothstep(0.0, 0.1, vUv.x) * smoothstep(0.0, 0.1, 1.0 - vUv.x) 
+                             * smoothstep(0.0, 0.1, vUv.y) * smoothstep(0.0, 0.1, 1.0 - vUv.y);
+              color = mix(color, color1, edgeGlow * 0.5);
+              
+              gl_FragColor = vec4(color, opacity);
+            }
+          `,
           transparent: true,
-          opacity: 0.5,
-          wireframe: false
+          side: THREE.FrontSide,
+          depthWrite: false
         })
-        const previewMesh = new THREE.Mesh(previewGeo, previewMat)
         
-        // Add edge outline (only box edges, no triangle diagonals)
+        // BoxGeometry(width, height, depth)
+        const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
+        const previewMesh = new THREE.Mesh(previewGeo, stripeMaterial)
+        
+        // Simple edge outline
         const edgesGeo = new THREE.EdgesGeometry(previewGeo)
         const edgesMat = new THREE.LineBasicMaterial({
-          color: 0xffaa66,
-          transparent: true,
-          opacity: 0.9
+          color: 0xffaa44
         })
         const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat)
         previewMesh.add(edgeLines)
@@ -427,6 +468,8 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Update preview mesh
       previewMeshRef.current.scale.set(width, 1, 1)
+      // Update shader uniform with current scale
+      previewMeshRef.current.material.uniforms.meshScale.value.set(width, 1, 1)
       // Position centered on the endpoint (which is already at mid-height)
       previewMeshRef.current.position.set(cx, endpoint.y, cz)
       
@@ -435,17 +478,35 @@ export function useThreeScene(containerRef, geometryData) {
       previewMeshRef.current.rotation.set(0, -angle, 0)
       previewMeshRef.current.visible = true
       
-      // Show a marker at the endpoint we're building from
+      // Show a marker at the endpoint we're building from (orange glow)
       if (previewPointsRef.current.length === 0) {
-        const markerGeo = new THREE.SphereGeometry(0.05, 16, 16)
-        const markerMat = new THREE.MeshBasicMaterial({ color: 0xed5700 })
+        const markerGeo = new THREE.SphereGeometry(0.06, 16, 16)
+        const markerMat = new THREE.MeshBasicMaterial({ 
+          color: 0xff8800,
+          transparent: true,
+          opacity: 0.9
+        })
         const marker = new THREE.Mesh(markerGeo, markerMat)
         marker.position.set(endpoint.x, endpoint.y, endpoint.z)
         scene.add(marker)
         previewPointsRef.current.push(marker)
+        
+        // Add glow sphere
+        const glowGeo = new THREE.SphereGeometry(0.1, 16, 16)
+        const glowMat = new THREE.MeshBasicMaterial({
+          color: 0xff8800,
+          transparent: true,
+          opacity: 0.3
+        })
+        const glowMarker = new THREE.Mesh(glowGeo, glowMat)
+        glowMarker.position.set(endpoint.x, endpoint.y, endpoint.z)
+        scene.add(glowMarker)
+        previewPointsRef.current.push(glowMarker)
       } else {
-        // Update marker position in case selection changed
-        previewPointsRef.current[0].position.set(endpoint.x, endpoint.y, endpoint.z)
+        // Update marker positions in case selection changed
+        previewPointsRef.current.forEach(marker => {
+          marker.position.set(endpoint.x, endpoint.y, endpoint.z)
+        })
       }
     }
     
