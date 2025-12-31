@@ -55,9 +55,9 @@ export const useViewportStore = create((set, get) => ({
   selectedElementId: null,  // For element selection mode (panel id)
   selectedFaceId: null,
   selectedVertexIdx: null,
-  setSelectedElement: (elementId) => set({ selectedElementId: elementId, selectedFaceId: null, selectedVertexIdx: null }),
-  setSelectedFace: (faceId) => set({ selectedFaceId: faceId, selectedElementId: null, selectedVertexIdx: null }),
-  setSelectedVertex: (idx) => set({ selectedVertexIdx: idx, selectedElementId: null, selectedFaceId: null }),
+  setSelectedElement: (elementId) => set({ selectionMode: 'element', selectedElementId: elementId, selectedFaceId: null, selectedVertexIdx: null }),
+  setSelectedFace: (faceId) => set({ selectionMode: 'face', selectedFaceId: faceId, selectedElementId: null, selectedVertexIdx: null }),
+  setSelectedVertex: (idx) => set({ selectionMode: 'point', selectedVertexIdx: idx, selectedElementId: null, selectedFaceId: null }),
   clearSelection: () => set({ selectedElementId: null, selectedFaceId: null, selectedVertexIdx: null }),
   
   // Hover highlight (bi-directional sync between viewport and spreadsheet)

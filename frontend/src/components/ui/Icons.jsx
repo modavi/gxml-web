@@ -51,6 +51,19 @@ export function IconFace() {
   )
 }
 
+// Element/cube icon for element selection mode
+export function IconElement() {
+  return (
+    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.2">
+      {/* 3D cube */}
+      <path d="M8 1L14 4.5V11.5L8 15L2 11.5V4.5L8 1Z" />
+      <path d="M8 8V15" />
+      <path d="M8 8L14 4.5" />
+      <path d="M8 8L2 4.5" />
+    </svg>
+  )
+}
+
 export function IconChevronDown() {
   return (
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
@@ -106,6 +119,18 @@ export function IconUndo() {
     <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
       <path d="M3 7v6h6" />
       <path d="M3 13a9 9 0 1 0 3-7.7L3 7" />
+    </svg>
+  )
+}
+
+// Refresh icon
+export function IconRefresh() {
+  return (
+    <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2">
+      <path d="M23 4v6h-6" />
+      <path d="M1 20v-6h6" />
+      <path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10" />
+      <path d="M20.49 15a9 9 0 0 1-14.85 3.36L1 14" />
     </svg>
   )
 }

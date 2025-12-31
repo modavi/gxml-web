@@ -9,10 +9,14 @@ export const useAppStore = create((set, get) => ({
   editorRef: null,
   setEditorRef: (ref) => set({ editorRef: ref }),
   
-  // Select panel in editor by index (0-based)
+  // Select panel in editor by index (0-based, can be string or number)
   selectPanelInEditor: (panelIndex) => {
     const { xmlContent, editorRef } = get()
     if (!editorRef || panelIndex === null || panelIndex === undefined) return
+    
+    // Convert to number if string
+    const index = typeof panelIndex === 'string' ? parseInt(panelIndex, 10) : panelIndex
+    if (isNaN(index)) return
     
     // Find all <panel tags (case insensitive)
     const panelRegex = /<panel\b/gi
@@ -21,7 +25,7 @@ export const useAppStore = create((set, get) => ({
     let startPos = -1
     
     while ((match = panelRegex.exec(xmlContent)) !== null) {
-      if (currentIndex === panelIndex) {
+      if (currentIndex === index) {
         startPos = match.index
         break
       }
@@ -73,7 +77,8 @@ export const useAppStore = create((set, get) => ({
   // Add a panel from creation mode - inserted after selectedPanelIndex
   // startPoint and endPoint are in world XZ coordinates (floor plane)
   // parentRotation is the cumulative world rotation of the parent panel (in degrees)
-  addPanelFromPoints: (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0) => {
+  // Returns: Promise that resolves with the new panel index when rendering is complete
+  addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0) => {
     const { xmlContent, setXmlContent, renderGXML, isAutoUpdate } = get()
     
     // Calculate panel properties from two points in XZ plane
@@ -121,9 +126,9 @@ export const useAppStore = create((set, get) => ({
         setXmlContent(newContent)
         
         if (isAutoUpdate) {
-          setTimeout(() => renderGXML(), 100)
+          await renderGXML()
         }
-        return true
+        return afterPanelIndex + 1  // Return new panel's index
       }
     }
     
@@ -135,12 +140,14 @@ export const useAppStore = create((set, get) => ({
       setXmlContent(newContent)
       
       if (isAutoUpdate) {
-        setTimeout(() => renderGXML(), 100)
+        await renderGXML()
       }
-      return true
+      // Count existing panels to determine index
+      const panelCount = (xmlContent.match(/<panel\b/gi) || []).length
+      return panelCount  // New panel is at the end
     }
     
-    return false
+    return null  // Failed
   },
   
   // Editor state

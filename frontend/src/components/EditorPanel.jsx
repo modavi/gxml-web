@@ -2,7 +2,7 @@ import { useCallback, useRef, useEffect } from 'react'
 import Editor from '@monaco-editor/react'
 import { useAppStore } from '../stores/appStore'
 import { useViewportStore } from '../stores/viewportStore'
-import { IconGXML } from './ui/Icons'
+import { IconGXML, IconRefresh } from './ui/Icons'
 import './EditorPanel.css'
 
 const AUTO_UPDATE_DELAY = 500
@@ -99,8 +99,8 @@ function EditorPanel() {
             />
             Auto-update
           </label>
-          <button className="render-btn" onClick={renderGXML}>
-            Render (Ctrl+Enter)
+          <button className="render-btn" onClick={renderGXML} title="Render (Ctrl+Enter)">
+            <IconRefresh /> Refresh
           </button>
         </div>
       </div>

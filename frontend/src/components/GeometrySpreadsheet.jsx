@@ -4,7 +4,7 @@ import 'ag-grid-community/styles/ag-grid.css'
 import 'ag-grid-community/styles/ag-theme-alpine.css'
 import { useAppStore } from '../stores/appStore'
 import { useViewportStore } from '../stores/viewportStore'
-import { IconPoint, IconVertex, IconFace, IconTable, IconChevronDown, IconChevronUp } from './ui/Icons'
+import { IconPoint, IconVertex, IconFace, IconElement, IconTable, IconChevronDown, IconChevronUp } from './ui/Icons'
 import './GeometrySpreadsheet.css'
 
 function GeometrySpreadsheet() {
@@ -16,18 +16,22 @@ function GeometrySpreadsheet() {
     toggleSpreadsheet,
     selectedFaceId,
     selectedVertexIdx,
+    setSelectedElement,
     setSelectedFace,
     setSelectedVertex,
     hoveredFaceId,
     hoveredVertexIdx,
+    hoveredElementId,
     setHoveredFace,
     setHoveredVertex,
+    setHoveredElement,
     clearHover,
   } = useViewportStore()
 
   const pointsGridRef = useRef(null)
   const verticesGridRef = useRef(null)
   const facesGridRef = useRef(null)
+  const elementsGridRef = useRef(null)
   const containerRef = useRef(null)
   const [height, setHeight] = useState(350)
   const isDraggingRef = useRef(false)
@@ -70,13 +74,14 @@ function GeometrySpreadsheet() {
     e.preventDefault()
   }, [])
 
-  const { allPoints, allVertices, allFaces } = useMemo(() => {
+  const { allPoints, allVertices, allFaces, allElements } = useMemo(() => {
     const points = []
     const vertices = []  // Raw vertices (with duplicates)
     const faces = []
+    const elements = []  // Panels grouped by element
     
     if (!geometryData?.panels) {
-      return { allPoints: points, allVertices: vertices, allFaces: faces }
+      return { allPoints: points, allVertices: vertices, allFaces: faces, allElements: elements }
     }
     
     // Use same deduplication logic as viewport's createVertexMarkers
@@ -154,7 +159,33 @@ function GeometrySpreadsheet() {
       delete p.faceIds
     })
     
-    return { allPoints: points, allVertices: vertices, allFaces: faces }
+    // Build elements from panels (group by element ID - strip face suffix)
+    const elementMap = new Map()
+    geometryData.panels.forEach((panel) => {
+      const panelId = panel.id || ''
+      // Extract element ID by removing face suffix (e.g., "1-front", "1-top", "1-start" -> "1")
+      const elementId = panelId.replace(/-(?:front|back|top|bottom|start|end)$/, '')
+      
+      if (!elementMap.has(elementId)) {
+        elementMap.set(elementId, {
+          idx: elementMap.size,
+          id: elementId,
+          faces: [],
+          faceCount: 0,
+        })
+      }
+      const element = elementMap.get(elementId)
+      element.faces.push(panelId)
+      element.faceCount++
+    })
+    
+    // Convert to array and add face list string
+    elementMap.forEach((element) => {
+      element.faceList = element.faces.join(', ')
+      elements.push(element)
+    })
+    
+    return { allPoints: points, allVertices: vertices, allFaces: faces, allElements: elements }
   }, [geometryData])
 
   // Point columns
@@ -285,6 +316,40 @@ function GeometrySpreadsheet() {
     },
   ], [])
 
+  // Element columns
+  const elementColumns = useMemo(() => [
+    {
+      field: 'idx',
+      headerName: '#',
+      width: 70,
+      filter: 'agNumberColumnFilter',
+      sortable: true,
+      cellClass: 'geo-cell-index',
+    },
+    {
+      field: 'id',
+      headerName: 'ID',
+      width: 120,
+      filter: 'agTextColumnFilter',
+      sortable: true,
+    },
+    {
+      field: 'faceCount',
+      headerName: 'Faces',
+      width: 80,
+      filter: 'agNumberColumnFilter',
+      sortable: true,
+    },
+    {
+      field: 'faceList',
+      headerName: 'Face IDs',
+      flex: 1,
+      minWidth: 150,
+      filter: 'agTextColumnFilter',
+      sortable: true,
+    },
+  ], [])
+
   // Grid options
   const defaultColDef = useMemo(() => ({
     resizable: true,
@@ -312,6 +377,18 @@ function GeometrySpreadsheet() {
     }
     return ''
   }, [hoveredFaceId])
+
+  const getElementRowClass = useCallback((params) => {
+    // Highlight if this element is hovered
+    if (hoveredElementId && params.data?.id === hoveredElementId) {
+      return 'geo-row-hovered'
+    }
+    // Also highlight if any of this element's faces are hovered
+    if (hoveredFaceId && params.data?.faces?.some(f => f === hoveredFaceId)) {
+      return 'geo-row-hovered'
+    }
+    return ''
+  }, [hoveredElementId, hoveredFaceId])
 
   // Handle point selection from grid
   const onPointSelectionChanged = useCallback(() => {
@@ -347,6 +424,17 @@ function GeometrySpreadsheet() {
     }
   }, [setSelectedFace])
 
+  // Handle element selection from grid
+  const onElementSelectionChanged = useCallback(() => {
+    const gridApi = elementsGridRef.current?.api
+    if (!gridApi) return
+    
+    const selectedRows = gridApi.getSelectedRows()
+    if (selectedRows.length > 0) {
+      setSelectedElement(selectedRows[0].id)
+    }
+  }, [setSelectedElement])
+
   // Handle row hover for points grid
   const onPointRowMouseOver = useCallback((event) => {
     if (event.data) {
@@ -367,6 +455,13 @@ function GeometrySpreadsheet() {
       setHoveredFace(event.data.id)
     }
   }, [setHoveredFace])
+
+  // Handle row hover for elements grid (hover whole element)
+  const onElementRowMouseOver = useCallback((event) => {
+    if (event.data?.id) {
+      setHoveredElement(event.data.id)
+    }
+  }, [setHoveredElement])
 
   // Handle mouse leave from grid
   const onRowMouseOut = useCallback(() => {
@@ -443,6 +538,20 @@ function GeometrySpreadsheet() {
           <>
             <div className="geo-tabs">
               <button
+                className={`geo-tab ${spreadsheetTab === 'elements' ? 'active' : ''}`}
+                onClick={() => setSpreadsheetTab('elements')}
+                title="Elements (panels)"
+              >
+                <IconElement /> Elements
+              </button>
+              <button
+                className={`geo-tab ${spreadsheetTab === 'faces' ? 'active' : ''}`}
+                onClick={() => setSpreadsheetTab('faces')}
+                title="Faces"
+              >
+                <IconFace /> Faces
+              </button>
+              <button
                 className={`geo-tab ${spreadsheetTab === 'points' ? 'active' : ''}`}
                 onClick={() => setSpreadsheetTab('points')}
                 title="Points (deduplicated vertices)"
@@ -456,26 +565,20 @@ function GeometrySpreadsheet() {
               >
                 <IconVertex /> Vertices
               </button>
-              <button
-                className={`geo-tab ${spreadsheetTab === 'faces' ? 'active' : ''}`}
-                onClick={() => setSpreadsheetTab('faces')}
-                title="Faces"
-              >
-                <IconFace /> Faces
-              </button>
             </div>
             <div className="geo-summary">
+              <span>{allElements.length} elements</span>
+              <span>{allFaces.length} faces</span>
               <span>{allPoints.length} points</span>
               <span>{allVertices.length} verts</span>
-              <span>{allFaces.length} faces</span>
             </div>
           </>
         )}
         {!spreadsheetOpen && (
           <div className="geo-summary-collapsed">
-            <span>{allPoints.length} pts</span>
-            <span>{allVertices.length} verts</span>
+            <span>{allElements.length} elems</span>
             <span>{allFaces.length} faces</span>
+            <span>{allPoints.length} pts</span>
           </div>
         )}
       </div>
@@ -532,6 +635,24 @@ function GeometrySpreadsheet() {
             onSelectionChanged={onFaceSelectionChanged}
             onCellMouseOver={onFaceRowMouseOver}
             getRowClass={getFaceRowClass}
+            animateRows={false}
+            headerHeight={24}
+            rowHeight={28}
+            suppressCellFocus={true}
+            getRowId={(params) => params.data.id}
+          />
+        )}
+        {spreadsheetTab === 'elements' && (
+          <AgGridReact
+            key="elements-grid"
+            ref={elementsGridRef}
+            rowData={allElements}
+            columnDefs={elementColumns}
+            defaultColDef={defaultColDef}
+            rowSelection="single"
+            onSelectionChanged={onElementSelectionChanged}
+            onCellMouseOver={onElementRowMouseOver}
+            getRowClass={getElementRowClass}
             animateRows={false}
             headerHeight={24}
             rowHeight={28}

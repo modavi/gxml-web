@@ -1,4 +1,5 @@
 import { useViewportStore } from '../stores/viewportStore'
+import { IconElement, IconFace, IconPoint } from './ui/Icons'
 import './SelectionModeBar.css'
 
 function SelectionModeBar() {
@@ -11,21 +12,21 @@ function SelectionModeBar() {
         onClick={() => setSelectionMode('element')}
         title="Element Selection - Select entire panels"
       >
-        Element
+        <IconElement /> Element
       </button>
       <button
         className={`selection-mode-btn ${selectionMode === 'face' ? 'active' : ''}`}
         onClick={() => setSelectionMode('face')}
         title="Face Selection - Select individual faces"
       >
-        Face
+        <IconFace /> Face
       </button>
       <button
         className={`selection-mode-btn ${selectionMode === 'point' ? 'active' : ''}`}
         onClick={() => setSelectionMode('point')}
         title="Point Selection - Select vertices"
       >
-        Point
+        <IconPoint /> Point
       </button>
     </div>
   )

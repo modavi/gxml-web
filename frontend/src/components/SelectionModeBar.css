@@ -13,7 +13,10 @@
 }
 
 .selection-mode-btn {
-  padding: 4px 12px;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 10px;
   font-size: 11px;
   font-weight: 500;
   background-color: transparent;
@@ -22,6 +25,11 @@
   color: var(--text-muted);
   cursor: pointer;
   transition: all 0.1s ease;
+}
+
+.selection-mode-btn svg {
+  width: 14px;
+  height: 14px;
 }
 
 .selection-mode-btn:hover {
