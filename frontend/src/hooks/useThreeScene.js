@@ -2,8 +2,14 @@ import { useEffect, useRef, useCallback } from 'react'
 import * as THREE from 'three'
 import { OrbitControls } from 'three/examples/jsm/controls/OrbitControls'
 import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRenderer'
+import { EffectComposer } from 'three/examples/jsm/postprocessing/EffectComposer'
+import { RenderPass } from 'three/examples/jsm/postprocessing/RenderPass'
+import { UnrealBloomPass } from 'three/examples/jsm/postprocessing/UnrealBloomPass'
 import { useViewportStore } from '../stores/viewportStore'
 import { useAppStore } from '../stores/appStore'
+
+// Bloom layer - objects on this layer will glow
+const BLOOM_LAYER = 1
 
 // ============================================
 // Creation Mode Preview Panel Settings
@@ -13,7 +19,7 @@ const PREVIEW_PANEL = {
   stripeColor1: 0xffaa55,      // Light stripe color
   stripeColor2: 0xdd9944,      // Dark stripe color
   holoTint: 0xffffff,          // Holographic cyan tint
-  wireframeColor: 0xffcc66,    // Wireframe edge color
+  wireframeColor: 0xffaa44,    // Wireframe edge color
   
   // Stripe settings
   stripeScale: 6.0,            // Diagonal stripe density
@@ -26,6 +32,11 @@ const PREVIEW_PANEL = {
   gradientStart: 0.3,          // Where gradient starts (0 = bottom, 1 = top)
   gradientStrength: 0.7,      // Vertical gradient strength (0-1)
   
+  // Bloom settings for wireframe glow
+  bloomStrength: 1.5,          // Glow intensity
+  bloomRadius: 0.4,            // Glow spread
+  bloomThreshold: 0.0,         // Brightness threshold
+  
   // Overall
   opacity: 0.55,               // Panel transparency
 }
@@ -34,6 +45,7 @@ export function useThreeScene(containerRef, geometryData) {
   const sceneRef = useRef(null)
   const cameraRef = useRef(null)
   const rendererRef = useRef(null)
+  const bloomComposerRef = useRef(null)
   const controlsRef = useRef(null)
   const labelRendererRef = useRef(null)
   const geometryGroupRef = useRef(null)
@@ -149,8 +161,70 @@ export function useThreeScene(containerRef, geometryData) {
     const renderer = new THREE.WebGLRenderer({ antialias: true })
     renderer.setSize(width, height)
     renderer.setPixelRatio(window.devicePixelRatio)
+    renderer.toneMapping = THREE.ReinhardToneMapping
     container.appendChild(renderer.domElement)
     rendererRef.current = renderer
+
+    // ============================================
+    // Selective Bloom Setup
+    // Render scene normally, then overlay glow from bloom-layer objects
+    // ============================================
+    
+    // Bloom scene - a separate scene containing only objects that should glow
+    const bloomScene = new THREE.Scene()
+    bloomScene.background = null  // Transparent/black
+    
+    // Bloom composer - renders bloom scene to internal render targets
+    const bloomRenderPass = new RenderPass(bloomScene, camera)
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      PREVIEW_PANEL.bloomStrength,
+      PREVIEW_PANEL.bloomRadius,
+      PREVIEW_PANEL.bloomThreshold
+    )
+    
+    const bloomComposer = new EffectComposer(renderer)
+    bloomComposer.renderToScreen = false
+    bloomComposer.addPass(bloomRenderPass)
+    bloomComposer.addPass(bloomPass)
+    bloomComposerRef.current = bloomComposer
+    
+    // Create a fullscreen quad for additive bloom compositing
+    const bloomQuadGeo = new THREE.PlaneGeometry(2, 2)
+    const bloomQuadMat = new THREE.ShaderMaterial({
+      uniforms: { 
+        bloomTexture: { value: null }
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D bloomTexture;
+        varying vec2 vUv;
+        void main() {
+          gl_FragColor = texture2D(bloomTexture, vUv);
+        }
+      `,
+      transparent: true,
+      blending: THREE.AdditiveBlending,
+      depthTest: false,
+      depthWrite: false
+    })
+    const bloomQuad = new THREE.Mesh(bloomQuadGeo, bloomQuadMat)
+    const bloomQuadScene = new THREE.Scene()
+    const bloomQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+    bloomQuadScene.add(bloomQuad)
+    
+    // Store bloom data on scene
+    scene.userData.bloomScene = bloomScene
+    scene.userData.bloomComposer = bloomComposer
+    scene.userData.bloomQuad = bloomQuad
+    scene.userData.bloomQuadScene = bloomQuadScene
+    scene.userData.bloomQuadCamera = bloomQuadCamera
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement)
@@ -250,7 +324,56 @@ export function useThreeScene(containerRef, geometryData) {
         updateLabelOcclusion()
       }
       
-      renderer.render(scene, camera)
+      // Check if we have any bloom objects (creation mode preview)
+      const hasBloomObjects = previewMeshRef.current && previewMeshRef.current.visible
+      
+      if (hasBloomObjects) {
+        const { bloomScene, bloomComposer, bloomQuad, bloomQuadScene, bloomQuadCamera } = scene.userData
+        
+        // Step 1: Copy bloom objects to bloom scene FIRST
+        while (bloomScene.children.length > 0) {
+          bloomScene.remove(bloomScene.children[0])
+        }
+        
+        // Clone wireframe and markers with world transforms
+        if (previewMeshRef.current) {
+          previewMeshRef.current.traverse((child) => {
+            if (child.layers.isEnabled(BLOOM_LAYER)) {
+              const temp = child.clone()
+              child.getWorldPosition(temp.position)
+              child.getWorldQuaternion(temp.quaternion)
+              child.getWorldScale(temp.scale)
+              bloomScene.add(temp)
+            }
+          })
+        }
+        
+        previewPointsRef.current.forEach(marker => {
+          if (marker.layers.isEnabled(BLOOM_LAYER)) {
+            const temp = marker.clone()
+            marker.getWorldPosition(temp.position)
+            bloomScene.add(temp)
+          }
+        })
+        
+        // Step 2: Render bloom pass to offscreen buffer
+        bloomComposer.render()
+        const bloomTexture = bloomComposer.readBuffer.texture
+        
+        // Step 3: Render main scene to screen (clears the screen)
+        renderer.setRenderTarget(null)
+        renderer.render(scene, camera)
+        
+        // Step 4: Composite bloom on top with additive blending
+        bloomQuad.material.uniforms.bloomTexture.value = bloomTexture
+        renderer.autoClear = false
+        renderer.render(bloomQuadScene, bloomQuadCamera)
+        renderer.autoClear = true
+      } else {
+        // Normal rendering (no bloom)
+        renderer.render(scene, camera)
+      }
+      
       labelRenderer.render(scene, camera)
     }
     animate()
@@ -262,6 +385,7 @@ export function useThreeScene(containerRef, geometryData) {
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
+      scene.userData.bloomComposer?.setSize(w, h)
       labelRenderer.setSize(w, h)
     }
     window.addEventListener('resize', handleResize)
@@ -520,12 +644,15 @@ export function useThreeScene(containerRef, geometryData) {
         const previewGeo = new THREE.BoxGeometry(1, 1, 0.25)
         const previewMesh = new THREE.Mesh(previewGeo, holoMaterial)
         
-        // Simple edge outline
+        // Glowing edge outline - add to bloom layer for glow effect
+        // Use bright emissive color for bloom to pick up
         const edgesGeo = new THREE.EdgesGeometry(previewGeo)
         const edgesMat = new THREE.LineBasicMaterial({
-          color: PREVIEW_PANEL.wireframeColor
+          color: new THREE.Color(PREVIEW_PANEL.wireframeColor).multiplyScalar(2.0),  // Brighten for bloom
+          toneMapped: false  // Prevent tone mapping from dimming the glow
         })
         const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat)
+        edgeLines.layers.enable(BLOOM_LAYER)  // Add to bloom layer for glow
         previewMesh.add(edgeLines)
         
         previewMeshRef.current = previewMesh
@@ -554,20 +681,9 @@ export function useThreeScene(containerRef, geometryData) {
         })
         const marker = new THREE.Mesh(markerGeo, markerMat)
         marker.position.set(endpoint.x, endpoint.y, endpoint.z)
+        marker.layers.enable(BLOOM_LAYER)  // Add glow to marker
         scene.add(marker)
         previewPointsRef.current.push(marker)
-        
-        // Add glow sphere
-        const glowGeo = new THREE.SphereGeometry(0.1, 16, 16)
-        const glowMat = new THREE.MeshBasicMaterial({
-          color: 0xff8800,
-          transparent: true,
-          opacity: 0.3
-        })
-        const glowMarker = new THREE.Mesh(glowGeo, glowMat)
-        glowMarker.position.set(endpoint.x, endpoint.y, endpoint.z)
-        scene.add(glowMarker)
-        previewPointsRef.current.push(glowMarker)
       } else {
         // Update marker positions in case selection changed
         previewPointsRef.current.forEach(marker => {
