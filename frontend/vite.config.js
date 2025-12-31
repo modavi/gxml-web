@@ -16,4 +16,10 @@ export default defineConfig({
     outDir: '../src/gxml_web/static/dist',
     emptyOutDir: true,
   },
+  test: {
+    globals: true,
+    environment: 'happy-dom',
+    setupFiles: ['./src/__tests__/setup.js'],
+    include: ['src/**/*.{test,spec}.{js,jsx}'],
+  },
 })
