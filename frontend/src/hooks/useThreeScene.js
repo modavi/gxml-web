@@ -5,6 +5,22 @@ import { CSS2DRenderer, CSS2DObject } from 'three/examples/jsm/renderers/CSS2DRe
 import { useViewportStore } from '../stores/viewportStore'
 import { useAppStore } from '../stores/appStore'
 
+// ============================================
+// Creation Mode Preview Panel Settings
+// ============================================
+const PREVIEW_PANEL = {
+  // Stripe colors
+  stripeColor1: 0xffaa55,      // Light stripe color
+  stripeColor2: 0xdd9944,      // Dark stripe color
+  wireframeColor: 0xffaa44,    // Wireframe edge color
+  
+  // Stripe settings
+  stripeScale: 6.0,            // Stripe density (higher = more stripes)
+  
+  // Overall
+  opacity: 0.6,                // Panel transparency
+}
+
 export function useThreeScene(containerRef, geometryData) {
   const sceneRef = useRef(null)
   const cameraRef = useRef(null)
@@ -398,24 +414,21 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Create preview mesh if it doesn't exist
       if (!previewMeshRef.current) {
-        // Custom shader material for diagonal stripes with glow effect
+        // Custom shader material for diagonal stripes
         const stripeMaterial = new THREE.ShaderMaterial({
           uniforms: {
-            color1: { value: new THREE.Color(0xffaa55) },  // Light orange
-            color2: { value: new THREE.Color(0xdd9944) },  // Very slightly darker orange
-            stripeScale: { value: 6.0 },
-            opacity: { value: 0.6 },
+            color1: { value: new THREE.Color(PREVIEW_PANEL.stripeColor1) },
+            color2: { value: new THREE.Color(PREVIEW_PANEL.stripeColor2) },
+            stripeScale: { value: PREVIEW_PANEL.stripeScale },
+            opacity: { value: PREVIEW_PANEL.opacity },
             meshScale: { value: new THREE.Vector3(1, 1, 1) }
           },
           vertexShader: `
             uniform vec3 meshScale;
-            varying vec2 vUv;
             varying vec3 vAnchoredPosition;
             void main() {
-              vUv = uv;
-              // Anchor pattern to start of box (x = -0.5 in local coords becomes 0)
-              // This way pattern expands from the start point as panel lengthens
-              vec3 anchored = position + vec3(0.5, 0.5, 0.125); // offset to corner
+              // Anchor pattern to start of box
+              vec3 anchored = position + vec3(0.5, 0.5, 0.125);
               vAnchoredPosition = anchored * meshScale;
               gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
             }
@@ -425,7 +438,6 @@ export function useThreeScene(containerRef, geometryData) {
             uniform vec3 color2;
             uniform float stripeScale;
             uniform float opacity;
-            varying vec2 vUv;
             varying vec3 vAnchoredPosition;
             
             void main() {
@@ -436,11 +448,6 @@ export function useThreeScene(containerRef, geometryData) {
               
               // Mix colors based on stripe
               vec3 color = mix(color2, color1, stripe * 0.7);
-              
-              // Add edge glow effect (still use UVs for edge detection)
-              float edgeGlow = 1.0 - smoothstep(0.0, 0.1, vUv.x) * smoothstep(0.0, 0.1, 1.0 - vUv.x) 
-                             * smoothstep(0.0, 0.1, vUv.y) * smoothstep(0.0, 0.1, 1.0 - vUv.y);
-              color = mix(color, color1, edgeGlow * 0.5);
               
               gl_FragColor = vec4(color, opacity);
             }
@@ -457,7 +464,7 @@ export function useThreeScene(containerRef, geometryData) {
         // Simple edge outline
         const edgesGeo = new THREE.EdgesGeometry(previewGeo)
         const edgesMat = new THREE.LineBasicMaterial({
-          color: 0xffaa44
+          color: PREVIEW_PANEL.wireframeColor
         })
         const edgeLines = new THREE.LineSegments(edgesGeo, edgesMat)
         previewMesh.add(edgeLines)
