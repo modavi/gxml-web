@@ -74,12 +74,14 @@ export const useAppStore = create((set, get) => ({
     editorRef.revealLineInCenter(startLC.lineNumber)
   },
   
-  // Add a panel from creation mode - inserted after selectedPanelIndex
+  // Add a panel from creation mode
   // startPoint and endPoint are in world XZ coordinates (floor plane)
   // parentRotation is the cumulative world rotation of the parent panel (in degrees)
   // snapInfo: optional { spanId, spanPoint } for snapping to another panel
+  // attachInfo: optional { attachId, attachPoint } for attaching to a specific panel at a specific point
+  //   When provided, the panel is always appended to the end and uses attach-id/attach-point
   // Returns: Promise that resolves with the new panel index when rendering is complete
-  addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0, snapInfo = null) => {
+  addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0, snapInfo = null, attachInfo = null) => {
     const { xmlContent, setXmlContent, renderGXML, isAutoUpdate } = get()
     
     // Calculate panel properties from two points in XZ plane
@@ -111,10 +113,35 @@ export const useAppStore = create((set, get) => ({
       panelAttrs.push(`span-point="${snapInfo.spanPoint}"`)
     }
     
+    // Add attach attributes if attaching to a non-sequential panel
+    if (attachInfo) {
+      panelAttrs.push(`attach-id="${attachInfo.attachId}"`)
+      // Only add attach-point if not at the default endpoint (1.0)
+      if (attachInfo.attachPoint !== undefined && attachInfo.attachPoint !== 1.0) {
+        panelAttrs.push(`attach-point="${round(attachInfo.attachPoint)}"`)
+      }
+    }
+    
     const panelXml = `<panel ${panelAttrs.join(' ')}/>`
     
-    if (afterPanelIndex !== null) {
-      // Insert after the specified panel
+    // When attachInfo is provided, always append to end of panel list
+    // This allows attaching to any panel regardless of position
+    if (attachInfo) {
+      const closingTagMatch = xmlContent.match(/<\/root>/i)
+      if (closingTagMatch) {
+        const insertPos = xmlContent.lastIndexOf('</root>')
+        const newContent = xmlContent.substring(0, insertPos) + '    ' + panelXml + '\n' + xmlContent.substring(insertPos)
+        setXmlContent(newContent)
+        
+        if (isAutoUpdate) {
+          await renderGXML()
+        }
+        // Count existing panels to determine index
+        const panelCount = (xmlContent.match(/<panel\b/gi) || []).length
+        return panelCount  // New panel is at the end
+      }
+    } else if (afterPanelIndex !== null) {
+      // Legacy behavior: Insert after the specified panel (when no attachInfo)
       const panelRegex = /<panel\b[^>]*(?:\/>|>[\s\S]*?<\/panel>)/gi
       let match
       let currentIndex = 0
@@ -155,6 +182,60 @@ export const useAppStore = create((set, get) => ({
     }
     
     return null  // Failed
+  },
+  
+  // Update an attribute on an existing panel
+  // panelIndex: which panel to update (0-indexed)
+  // attribute: the attribute name (e.g., 'attach-point')
+  // value: the new value (null to remove the attribute)
+  // Returns: Promise that resolves when complete
+  updatePanelAttribute: async (panelIndex, attribute, value) => {
+    const { xmlContent, setXmlContent, renderGXML, isAutoUpdate } = get()
+    
+    const panelRegex = /<panel\b[^>]*(?:\/>|>[\s\S]*?<\/panel>)/gi
+    let match
+    let currentIndex = 0
+    
+    while ((match = panelRegex.exec(xmlContent)) !== null) {
+      if (currentIndex === panelIndex) {
+        const panelTag = match[0]
+        let newPanelTag
+        
+        // Check if attribute already exists
+        const attrRegex = new RegExp(`\\b${attribute}="[^"]*"`)
+        const hasAttr = attrRegex.test(panelTag)
+        
+        const round = (v) => Math.round(v * 1000) / 1000
+        const roundedValue = typeof value === 'number' ? round(value) : value
+        
+        if (value === null) {
+          // Remove the attribute
+          newPanelTag = panelTag.replace(attrRegex, '').replace(/\s+/g, ' ').replace(' />', '/>')
+        } else if (hasAttr) {
+          // Update existing attribute
+          newPanelTag = panelTag.replace(attrRegex, `${attribute}="${roundedValue}"`)
+        } else {
+          // Add new attribute (before the closing />)
+          if (panelTag.endsWith('/>')) {
+            newPanelTag = panelTag.replace('/>', ` ${attribute}="${roundedValue}"/>`)
+          } else {
+            // Has closing tag - add before >
+            newPanelTag = panelTag.replace(/>/, ` ${attribute}="${roundedValue}">`)
+          }
+        }
+        
+        const newContent = xmlContent.substring(0, match.index) + newPanelTag + xmlContent.substring(match.index + panelTag.length)
+        setXmlContent(newContent)
+        
+        if (isAutoUpdate) {
+          await renderGXML()
+        }
+        return true
+      }
+      currentIndex++
+    }
+    
+    return false  // Panel not found
   },
   
   // Editor state

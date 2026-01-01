@@ -26,6 +26,7 @@ import {
   resetToBaseColor,
   PreviewBrush,
   SnapHelper,
+  AttachPointGizmo,
 } from './three'
 
 // ============================================
@@ -71,7 +72,9 @@ export function useThreeScene(containerRef, geometryData) {
   // Creation mode refs
   const previewBrushRef = useRef(null)  // PreviewBrush instance
   const snapHelperRef = useRef(null)    // SnapHelper instance for snapping to panels
+  const attachGizmoRef = useRef(null)   // AttachPointGizmo for setting attach point
   const ctrlKeyRef = useRef(false)      // Track ctrl key state for disabling snap
+  const lastTargetPointRef = useRef(null)  // Last mouse target for preview updates
   const xyPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0))  // XY plane at z=0
 
   // ============================================
@@ -608,8 +611,8 @@ export function useThreeScene(containerRef, geometryData) {
       return null
     }
     
-    // Helper: Get the endpoint of a panel by index from geometry data
-    const getSelectedPanelEndpoint = () => {
+    // Helper: Get full panel info by index from geometry data
+    const getSelectedPanelInfo = () => {
       const appStore = useAppStore.getState()
       const viewportStore = useViewportStore.getState()
       const geometryData = appStore.geometryData
@@ -625,38 +628,63 @@ export function useThreeScene(containerRef, geometryData) {
       const panelPrefix = `${selectedId}-`
       const panel = geometryData.panels.find(p => p.id && p.id.startsWith(panelPrefix))
       
-      if (!panel?.endPoint) {
+      if (!panel?.startPoint || !panel?.endPoint) {
         return null
       }
       
       // Calculate the panel's world rotation from its start and end points
       // This gives us the cumulative rotation to pass to child panels
       let worldRotation = 0
-      if (panel.startPoint && panel.endPoint) {
-        const dx = panel.endPoint[0] - panel.startPoint[0]
-        const dz = panel.endPoint[2] - panel.startPoint[2]
-        worldRotation = -Math.atan2(dz, dx) * (180 / Math.PI)
-      }
+      const dx = panel.endPoint[0] - panel.startPoint[0]
+      const dz = panel.endPoint[2] - panel.startPoint[2]
+      worldRotation = -Math.atan2(dz, dx) * (180 / Math.PI)
       
       return {
-        x: panel.endPoint[0],
-        y: panel.endPoint[1],
-        z: panel.endPoint[2] || 0,
+        startPoint: panel.startPoint,
+        endPoint: panel.endPoint,
         panelIndex: selectedId,
         worldRotation: worldRotation
       }
     }
     
-    // Helper: Create or update preview panel (emerges from selected panel endpoint)
+    // Helper: Get the attach point position on a panel
+    // Uses the attach gizmo position if available, otherwise defaults to end (1.0)
+    const getAttachPointPosition = (panelInfo, attachPoint = 1.0) => {
+      if (!panelInfo) return null
+      
+      const start = new THREE.Vector3(
+        panelInfo.startPoint[0],
+        panelInfo.startPoint[1],
+        panelInfo.startPoint[2]
+      )
+      const end = new THREE.Vector3(
+        panelInfo.endPoint[0],
+        panelInfo.endPoint[1],
+        panelInfo.endPoint[2]
+      )
+      
+      const position = start.clone().lerp(end, attachPoint)
+      
+      return {
+        x: position.x,
+        y: position.y,
+        z: position.z,
+        panelIndex: panelInfo.panelIndex,
+        worldRotation: panelInfo.worldRotation
+      }
+    }
+    
+    // Helper: Create or update preview panel (emerges from attach point on selected panel)
     const updateCreationPreview = () => {
-      const endpoint = getSelectedPanelEndpoint()
+      const panelInfo = getSelectedPanelInfo()
       const appStore = useAppStore.getState()
       const geometryData = appStore.geometryData
       
       // Must have a selected panel to create from
-      if (!endpoint) {
+      if (!panelInfo) {
         previewBrushRef.current?.hide()
         snapHelperRef.current?.clear()
+        attachGizmoRef.current?.hide()
         return
       }
       
@@ -678,13 +706,39 @@ export function useThreeScene(containerRef, geometryData) {
         snapHelperRef.current = new SnapHelper(scene)
       }
       
+      // Initialize AttachPointGizmo if needed
+      if (!attachGizmoRef.current) {
+        attachGizmoRef.current = new AttachPointGizmo(scene, camera, renderer, renderer.domElement)
+        // Set callback to update preview when gizmo is dragged
+        attachGizmoRef.current.onAttachPointChange = () => {
+          // Re-run preview update with last known target point
+          if (lastTargetPointRef.current) {
+            const panelInfo = getSelectedPanelInfo()
+            if (panelInfo && attachGizmoRef.current) {
+              const attachPoint = attachGizmoRef.current.getAttachPoint()
+              const startPosition = getAttachPointPosition(panelInfo, attachPoint)
+              previewBrushRef.current?.update(startPosition, lastTargetPointRef.current)
+            }
+          }
+        }
+      }
+      
+      // Show attach gizmo on selected panel if not already visible for this panel
+      if (!attachGizmoRef.current.visible || attachGizmoRef.current.panelInfo?.panelIndex !== panelInfo.panelIndex) {
+        attachGizmoRef.current.show(panelInfo, 1.0)  // Default to end of panel
+      }
+      
+      // Get attach point position from gizmo
+      const attachPoint = attachGizmoRef.current.getAttachPoint()
+      const startPosition = getAttachPointPosition(panelInfo, attachPoint)
+      
       // Check for snap target (unless ctrl is held)
       let targetPoint = mousePoint
       if (!ctrlKeyRef.current) {
         const snapResult = snapHelperRef.current.findSnapTarget(
           mousePoint,
           geometryData,
-          endpoint.panelIndex  // Exclude the source panel
+          panelInfo.panelIndex  // Exclude the source panel
         )
         
         // Update snap visuals
@@ -699,8 +753,11 @@ export function useThreeScene(containerRef, geometryData) {
         snapHelperRef.current.clear()
       }
       
-      // Update preview with current endpoint and target position
-      previewBrushRef.current.update(endpoint, targetPoint)
+      // Store target point for gizmo drag updates
+      lastTargetPointRef.current = targetPoint
+      
+      // Update preview with current attach point and target position
+      previewBrushRef.current.update(startPosition, targetPoint)
     }
     
     // Click handler for selection OR creation
@@ -714,11 +771,16 @@ export function useThreeScene(containerRef, geometryData) {
       const viewportStore = useViewportStore.getState()
       const appStore = useAppStore.getState()
       
-      // CREATION MODE - create panel from selected panel's endpoint
+      // CREATION MODE - create panel from attach point on selected panel
       if (viewportStore.creationMode) {
-        const endpoint = getSelectedPanelEndpoint()
+        // Don't create if clicking on gizmo (let gizmo handle it)
+        if (attachGizmoRef.current?.dragging) {
+          return
+        }
         
-        if (!endpoint) {
+        const panelInfo = getSelectedPanelInfo()
+        
+        if (!panelInfo) {
           console.log('Creation mode: Please select a panel first')
           return
         }
@@ -732,6 +794,10 @@ export function useThreeScene(containerRef, geometryData) {
         const clickPoint = raycastToXZPlane()
         if (!clickPoint) return
         
+        // Get attach point from gizmo
+        const attachPoint = attachGizmoRef.current?.getAttachPoint() ?? 1.0
+        const startPosition = getAttachPointPosition(panelInfo, attachPoint)
+        
         // Check for snap (unless ctrl is held)
         let targetPoint = clickPoint
         let snapInfo = null
@@ -739,7 +805,7 @@ export function useThreeScene(containerRef, geometryData) {
           const snapResult = snapHelperRef.current.findSnapTarget(
             clickPoint,
             appStore.geometryData,
-            endpoint.panelIndex
+            panelInfo.panelIndex
           )
           if (snapResult) {
             targetPoint = snapResult.worldPoint
@@ -751,8 +817,8 @@ export function useThreeScene(containerRef, geometryData) {
         }
         
         // Calculate distance in XZ plane
-        const dx = targetPoint.x - endpoint.x
-        const dz = targetPoint.z - endpoint.z
+        const dx = targetPoint.x - startPosition.x
+        const dz = targetPoint.z - startPosition.z
         const dist = Math.sqrt(dx * dx + dz * dz)
         
         if (dist >= 0.05) {
@@ -762,14 +828,19 @@ export function useThreeScene(containerRef, geometryData) {
           // Clear snap visuals
           snapHelperRef.current?.clear()
           
-          // Create the panel, inserted after the selected panel
-          // Start at endpoint, end at target position (use endpoint.y for height)
-          const startPoint = { x: endpoint.x, y: endpoint.y, z: endpoint.z }
-          const endPointCoord = { x: targetPoint.x, y: endpoint.y, z: targetPoint.z }
+          // Create the panel - always append to end, use attach-id to reference source panel
+          const startPoint = { x: startPosition.x, y: startPosition.y, z: startPosition.z }
+          const endPointCoord = { x: targetPoint.x, y: startPosition.y, z: targetPoint.z }
+          
+          // Build attach info for the new panel
+          const attachInfo = {
+            attachId: panelInfo.panelIndex,
+            attachPoint: attachPoint,
+          }
           
           // Pass parent's world rotation so the relative rotation is calculated correctly
-          // addPanelFromPoints is now async and returns the new panel index
-          appStore.addPanelFromPoints(startPoint, endPointCoord, endpoint.panelIndex, 0.25, endpoint.worldRotation, snapInfo)
+          // afterPanelIndex is null because attachInfo handles positioning
+          appStore.addPanelFromPoints(startPoint, endPointCoord, null, 0.25, startPosition.worldRotation, snapInfo, attachInfo)
             .then((newPanelIndex) => {
               // Clear pending state
               previewBrushRef.current?.setPending(false)
@@ -783,6 +854,9 @@ export function useThreeScene(containerRef, geometryData) {
                 
                 // Select the newly created panel - geometry is now ready
                 viewportStore.setSelectedElement(newPanelIndex)
+                
+                // Hide attach gizmo since we're switching to new panel
+                attachGizmoRef.current?.hide()
                 
                 // Update preview after a short delay to ensure meshes are built
                 setTimeout(() => {
@@ -922,6 +996,10 @@ export function useThreeScene(containerRef, geometryData) {
       // Dispose snap helper
       snapHelperRef.current?.dispose()
       snapHelperRef.current = null
+      
+      // Dispose attach gizmo
+      attachGizmoRef.current?.dispose()
+      attachGizmoRef.current = null
       
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)
