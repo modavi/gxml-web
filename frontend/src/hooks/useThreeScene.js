@@ -27,6 +27,11 @@ import {
   PreviewBrush,
   SnapHelper,
   AttachPointGizmo,
+  snapToGrid,
+  snapPointToGrid,
+  snapAngle,
+  getAngleBetweenPoints,
+  pointAtAngleAndDistance,
 } from './three'
 
 // ============================================
@@ -741,13 +746,21 @@ export function useThreeScene(containerRef, geometryData) {
       const attachPoint = attachGizmoRef.current.getAttachPoint()
       const startPosition = getAttachPointPosition(panelInfo, attachPoint)
       
-      // Check for snap target (unless ctrl is held)
-      let targetPoint = mousePoint
-      if (!ctrlKeyRef.current) {
+      // Get snap settings from store
+      const viewportState = useViewportStore.getState()
+      const allSnappingDisabled = ctrlKeyRef.current
+      
+      // Apply snapping chain: wall snap -> grid snap -> rotation snap
+      let targetPoint = mousePoint.clone()
+      let hasWallSnap = false
+      
+      // 1. Wall snap (snap to existing panels)
+      if (!allSnappingDisabled && viewportState.wallSnapEnabled && snapHelperRef.current) {
         const snapResult = snapHelperRef.current.findSnapTarget(
           mousePoint,
           geometryData,
-          panelInfo.panelIndex  // Exclude the source panel
+          panelInfo.panelIndex,  // Exclude the source panel
+          viewportState.wallSnapWeights
         )
         
         // Update snap visuals
@@ -756,10 +769,25 @@ export function useThreeScene(containerRef, geometryData) {
         // Use snap point if found
         if (snapResult) {
           targetPoint = snapResult.worldPoint
+          hasWallSnap = true
         }
       } else {
-        // Ctrl held - clear snap visuals
-        snapHelperRef.current.clear()
+        // Wall snap disabled - clear visuals
+        snapHelperRef.current?.clear()
+      }
+      
+      // 2. Grid snap (only if no wall snap)
+      if (!allSnappingDisabled && !hasWallSnap && viewportState.gridSnapEnabled) {
+        targetPoint = snapPointToGrid(targetPoint, viewportState.gridSnapSize)
+      }
+      
+      // 3. Rotation snap (snap the angle from start to target)
+      if (!allSnappingDisabled && viewportState.rotationSnapEnabled) {
+        const startVec = new THREE.Vector3(startPosition.x, startPosition.y, startPosition.z)
+        const currentAngle = getAngleBetweenPoints(startVec, targetPoint)
+        const snappedAngle = snapAngle(currentAngle, viewportState.rotationSnapIncrement)
+        const distance = startVec.distanceTo(targetPoint)
+        targetPoint = pointAtAngleAndDistance(startVec, snappedAngle, distance)
       }
       
       // Store target point for gizmo drag updates
@@ -807,14 +835,28 @@ export function useThreeScene(containerRef, geometryData) {
         const attachPoint = attachGizmoRef.current?.getAttachPoint() ?? 1.0
         const startPosition = getAttachPointPosition(panelInfo, attachPoint)
         
-        // Check for snap (unless ctrl is held)
-        let targetPoint = clickPoint
+        // Get snap settings from store
+        const allSnappingDisabled = ctrlKeyRef.current
+        const { 
+          gridSnapEnabled, 
+          gridSnapSize, 
+          rotationSnapEnabled, 
+          rotationSnapIncrement,
+          wallSnapEnabled,
+          wallSnapWeights,
+        } = viewportStore
+        
+        // Apply snapping chain
+        let targetPoint = clickPoint.clone()
         let snapInfo = null
-        if (!ctrlKeyRef.current && snapHelperRef.current) {
+        
+        // 1. Wall snap
+        if (!allSnappingDisabled && wallSnapEnabled && snapHelperRef.current) {
           const snapResult = snapHelperRef.current.findSnapTarget(
             clickPoint,
             appStore.geometryData,
-            panelInfo.panelIndex
+            panelInfo.panelIndex,
+            wallSnapWeights
           )
           if (snapResult) {
             targetPoint = snapResult.worldPoint
@@ -823,6 +865,20 @@ export function useThreeScene(containerRef, geometryData) {
               spanPoint: snapResult.spanPoint,
             }
           }
+        }
+        
+        // 2. Grid snap (only if no wall snap)
+        if (!allSnappingDisabled && !snapInfo && gridSnapEnabled) {
+          targetPoint = snapPointToGrid(targetPoint, gridSnapSize)
+        }
+        
+        // 3. Rotation snap
+        if (!allSnappingDisabled && rotationSnapEnabled) {
+          const startVec = new THREE.Vector3(startPosition.x, startPosition.y, startPosition.z)
+          const currentAngle = getAngleBetweenPoints(startVec, targetPoint)
+          const snappedAngle = snapAngle(currentAngle, rotationSnapIncrement)
+          const distance = startVec.distanceTo(targetPoint)
+          targetPoint = pointAtAngleAndDistance(startVec, snappedAngle, distance)
         }
         
         // Calculate distance in XZ plane

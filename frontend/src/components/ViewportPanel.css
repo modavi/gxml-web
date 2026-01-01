@@ -23,17 +23,7 @@
   display: block;
 }
 
-/* Toolbar */
-.viewport-toolbar {
-  position: absolute;
-  top: 8px;
-  right: 8px;
-  display: flex;
-  gap: 4px;
-  z-index: 10;
-}
-
-/* Creation mode indicator */
+/* Creation mode indicator - centered */
 .creation-mode-indicator {
   position: absolute;
   top: 8px;
@@ -46,14 +36,14 @@
   padding: 6px 16px;
   background-color: rgba(237, 87, 0, 0.9);
   border-radius: 4px;
-  z-index: 10;
+  z-index: 100;
   font-size: 12px;
   font-weight: 600;
   color: white;
 }
 
 .creation-mode-indicator.warning {
-  background-color: rgba(60, 60, 60, 0.95);
+  background-color: rgba(50, 50, 50, 0.95);
   border: 1px solid var(--accent-color);
 }
 
@@ -65,4 +55,71 @@
 
 .creation-hint.warning {
   color: #ffaa00;
+}
+
+/* Left toolbar container */
+.viewport-left-toolbar {
+  position: absolute;
+  top: 8px;
+  left: 8px;
+  display: flex;
+  gap: 6px;
+  z-index: 10;
+}
+
+/* Shared toolbar button base */
+.viewport-toolbar-btn {
+  height: 26px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 5px;
+  padding: 0 8px;
+  background-color: rgba(30, 30, 30, 0.85);
+  border: none;
+  border-radius: 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 11px;
+  font-weight: 500;
+}
+
+.viewport-toolbar-btn svg {
+  width: 14px;
+  height: 14px;
+  flex-shrink: 0;
+}
+
+.viewport-toolbar-btn:hover {
+  background-color: rgba(55, 55, 55, 0.9);
+  color: var(--text-primary);
+}
+
+/* Creation mode toggle */
+.creation-mode-toggle {
+  width: 26px;
+  padding: 0;
+  margin-right: 4px;
+}
+
+.creation-mode-toggle.active {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+.creation-mode-toggle.active:hover {
+  background-color: var(--accent-hover);
+}
+
+/* Options dropdown button - top right */
+.viewport-options-btn {
+  position: absolute;
+  top: 8px;
+  right: 8px;
+}
+
+.viewport-options-btn svg:last-child {
+  width: 12px;
+  height: 12px;
+  margin-left: -2px;
 }

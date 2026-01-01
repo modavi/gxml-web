@@ -1,0 +1,199 @@
+.snap-toolbar {
+  display: flex;
+  gap: 4px;
+}
+
+/* Split button group */
+.snap-button-group {
+  position: relative;
+  display: flex;
+  height: 26px;
+}
+
+/* Left toggle button */
+.snap-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 26px;
+  height: 26px;
+  background-color: rgba(30, 30, 30, 0.85);
+  border: none;
+  border-radius: 3px 0 0 3px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.snap-toggle svg {
+  width: 14px;
+  height: 14px;
+}
+
+.snap-toggle:hover {
+  background-color: rgba(55, 55, 55, 0.9);
+  color: var(--text-primary);
+}
+
+.snap-toggle.active {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+.snap-toggle.active:hover {
+  background-color: var(--accent-hover);
+}
+
+/* Right dropdown toggle */
+.snap-dropdown-toggle {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 2px;
+  min-width: 36px;
+  padding: 0 6px;
+  height: 26px;
+  background-color: rgba(30, 30, 30, 0.85);
+  border: none;
+  border-left: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 0 3px 3px 0;
+  color: var(--text-muted);
+  cursor: pointer;
+  font-size: 10px;
+  font-weight: 500;
+}
+
+.snap-dropdown-toggle:hover {
+  background-color: rgba(55, 55, 55, 0.9);
+  color: var(--text-primary);
+}
+
+.snap-dropdown-toggle.open {
+  background-color: rgba(55, 55, 55, 0.9);
+  color: var(--text-primary);
+}
+
+.snap-dropdown-toggle svg {
+  width: 10px;
+  height: 10px;
+  opacity: 0.7;
+  flex-shrink: 0;
+}
+
+.snap-value {
+  min-width: 18px;
+  text-align: right;
+}
+
+/* Dropdown menu */
+.snap-dropdown {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  min-width: 140px;
+  background-color: rgba(35, 35, 35, 0.98);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  border-radius: 4px;
+  padding: 4px 0;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.4);
+  z-index: 200;
+}
+
+.snap-dropdown-wide {
+  min-width: 220px;
+}
+
+.snap-dropdown-title {
+  padding: 6px 10px 4px;
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+  margin-bottom: 4px;
+}
+
+.snap-dropdown-item {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  padding: 6px 10px;
+  background: none;
+  border: none;
+  color: var(--text-secondary);
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+}
+
+.snap-dropdown-item:hover {
+  background-color: rgba(255, 255, 255, 0.08);
+  color: var(--text-primary);
+}
+
+.snap-dropdown-item.active {
+  color: var(--accent-color);
+}
+
+/* Radio indicator */
+.snap-dropdown-radio {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  border: 2px solid currentColor;
+  opacity: 0.5;
+}
+
+.snap-dropdown-item.active .snap-dropdown-radio {
+  background-color: currentColor;
+  opacity: 1;
+}
+
+/* Weight settings */
+.snap-weight-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 6px 10px;
+  gap: 8px;
+}
+
+.snap-weight-label {
+  font-size: 11px;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+}
+
+.snap-weight-options {
+  display: flex;
+  gap: 2px;
+}
+
+.snap-weight-btn {
+  padding: 3px 6px;
+  font-size: 10px;
+  background-color: rgba(255, 255, 255, 0.05);
+  border: none;
+  border-radius: 2px;
+  color: var(--text-muted);
+  cursor: pointer;
+}
+
+.snap-weight-btn:hover {
+  background-color: rgba(255, 255, 255, 0.1);
+  color: var(--text-primary);
+}
+
+.snap-weight-btn.active {
+  background-color: var(--accent-color);
+  color: white;
+}
+
+.snap-dropdown-hint {
+  padding: 8px 10px 4px;
+  font-size: 10px;
+  color: var(--text-muted);
+  border-top: 1px solid rgba(255, 255, 255, 0.05);
+  margin-top: 4px;
+}

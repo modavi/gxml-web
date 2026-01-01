@@ -2,26 +2,20 @@
  * SnapHelper - Handles snapping to existing panels in creation mode
  * 
  * Features:
- * - Snap to any point along a panel's centerline
+ * - Snap to any point along a panel's centerline (wall snap)
  * - Weighted snap points at 0 (start), 0.5 (middle), 1.0 (end)
+ * - Grid snapping for precise positioning
+ * - Rotation snapping to fixed increments
  * - Visual feedback on snapped panel
  * - Returns span-id and span-point for the new panel
  */
 import * as THREE from 'three'
 import { BLOOM_LAYER } from './constants'
 
-// Snap configuration
+// Default snap configuration
 export const SNAP_CONFIG = {
   // Maximum distance to snap (in world units)
   snapRadius: 0.3,
-  
-  // Extra weight for special points (lower = higher priority)
-  // These are multipliers for the effective distance
-  weightedPoints: {
-    0.0: 0.5,   // Start point - half the distance = higher priority
-    0.5: 0.6,   // Midpoint - slightly higher priority
-    1.0: 0.5,   // End point - half the distance = higher priority
-  },
   
   // Visual feedback colors - cyan for general snaps
   snapHighlightColor: 0x00ffff,
@@ -30,6 +24,74 @@ export const SNAP_CONFIG = {
   // Golden/yellow for weighted snap points (start, mid, end)
   weightedSnapColor: 0xffcc00,
   weightedSnapEmissive: 0xaa8800,
+  
+  // Green for grid snap
+  gridSnapColor: 0x00ff88,
+}
+
+/**
+ * Snap a value to the nearest grid point
+ * @param {number} value - The value to snap
+ * @param {number} gridSize - The grid spacing
+ * @returns {number} - Snapped value
+ */
+export function snapToGrid(value, gridSize) {
+  if (!gridSize || gridSize <= 0) return value
+  return Math.round(value / gridSize) * gridSize
+}
+
+/**
+ * Snap a Vector3 to grid in XZ plane
+ * @param {THREE.Vector3} point - The point to snap
+ * @param {number} gridSize - The grid spacing
+ * @returns {THREE.Vector3} - New snapped point
+ */
+export function snapPointToGrid(point, gridSize) {
+  if (!gridSize || gridSize <= 0) return point.clone()
+  return new THREE.Vector3(
+    snapToGrid(point.x, gridSize),
+    point.y,
+    snapToGrid(point.z, gridSize)
+  )
+}
+
+/**
+ * Snap an angle to the nearest increment
+ * @param {number} angle - Angle in radians
+ * @param {number} incrementDegrees - Snap increment in degrees
+ * @returns {number} - Snapped angle in radians
+ */
+export function snapAngle(angle, incrementDegrees) {
+  if (!incrementDegrees || incrementDegrees <= 0) return angle
+  const incrementRadians = (incrementDegrees * Math.PI) / 180
+  return Math.round(angle / incrementRadians) * incrementRadians
+}
+
+/**
+ * Calculate the angle from one point to another (in XZ plane)
+ * @param {THREE.Vector3} from - Start point
+ * @param {THREE.Vector3} to - End point
+ * @returns {number} - Angle in radians
+ */
+export function getAngleBetweenPoints(from, to) {
+  const dx = to.x - from.x
+  const dz = to.z - from.z
+  return Math.atan2(dz, dx)
+}
+
+/**
+ * Get a point at a given angle and distance from origin
+ * @param {THREE.Vector3} origin - Origin point
+ * @param {number} angle - Angle in radians
+ * @param {number} distance - Distance from origin
+ * @returns {THREE.Vector3} - New point
+ */
+export function pointAtAngleAndDistance(origin, angle, distance) {
+  return new THREE.Vector3(
+    origin.x + Math.cos(angle) * distance,
+    origin.y,
+    origin.z + Math.sin(angle) * distance
+  )
 }
 
 /**
@@ -134,10 +196,26 @@ export class SnapHelper {
    * @param {THREE.Vector3} mousePoint - Mouse position in world space (XZ plane)
    * @param {Object} geometryData - The geometry data with panel info
    * @param {number|null} excludePanelIndex - Panel index to exclude (the source panel)
+   * @param {Object} wallSnapWeights - Weights for snap points { start: 0-1, middle: 0-1, end: 0-1 }
    * @returns {Object|null} - Snap result { panelIndex, spanPoint, worldPoint, distance }
    */
-  findSnapTarget(mousePoint, geometryData, excludePanelIndex = null) {
+  findSnapTarget(mousePoint, geometryData, excludePanelIndex = null, wallSnapWeights = null) {
     if (!geometryData?.panels) return null
+    
+    // Convert weights to the format used internally (lower = higher priority)
+    // A weight of 1.0 means highest priority (multiplier 0.5), 0 means disabled
+    const weights = wallSnapWeights || { start: 1.0, middle: 0.5, end: 1.0 }
+    const weightedPoints = {}
+    
+    if (weights.start > 0) {
+      weightedPoints['0.0'] = 1.0 - (weights.start * 0.5) // 1.0 -> 0.5, 0.5 -> 0.75
+    }
+    if (weights.middle > 0) {
+      weightedPoints['0.5'] = 1.0 - (weights.middle * 0.4) // 1.0 -> 0.6, 0.5 -> 0.8
+    }
+    if (weights.end > 0) {
+      weightedPoints['1.0'] = 1.0 - (weights.end * 0.5) // 1.0 -> 0.5, 0.5 -> 0.75
+    }
     
     let bestSnap = null
     let bestEffectiveDistance = Infinity
@@ -189,7 +267,7 @@ export class SnapHelper {
       let snappedT = t
       
       // Check if we're close to a weighted point
-      for (const [weightT, weightMultiplier] of Object.entries(SNAP_CONFIG.weightedPoints)) {
+      for (const [weightT, weightMultiplier] of Object.entries(weightedPoints)) {
         const targetT = parseFloat(weightT)
         const tDistance = Math.abs(t - targetT)
         
@@ -220,7 +298,7 @@ export class SnapHelper {
         const worldPoint = startPoint.clone().lerp(endPoint, snappedT)
         
         // Check if snapped to a weighted point
-        const isWeighted = Object.keys(SNAP_CONFIG.weightedPoints)
+        const isWeighted = Object.keys(weightedPoints)
           .map(parseFloat)
           .includes(snappedT)
         

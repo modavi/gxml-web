@@ -23,6 +23,32 @@ export const useViewportStore = create((set, get) => ({
   clearChain: () => set({ panelChain: [] }),
   undoLastChain: () => set((state) => ({ panelChain: state.panelChain.slice(0, -1) })),
   
+  // ===== SNAPPING SETTINGS =====
+  
+  // Grid snapping
+  gridSnapEnabled: false,
+  gridSnapSize: 0.25,
+  setGridSnapEnabled: (enabled) => set({ gridSnapEnabled: enabled }),
+  toggleGridSnap: () => set((state) => ({ gridSnapEnabled: !state.gridSnapEnabled })),
+  setGridSnapSize: (size) => set({ gridSnapSize: size }),
+  
+  // Rotation snapping
+  rotationSnapEnabled: true,
+  rotationSnapIncrement: 45, // degrees
+  setRotationSnapEnabled: (enabled) => set({ rotationSnapEnabled: enabled }),
+  toggleRotationSnap: () => set((state) => ({ rotationSnapEnabled: !state.rotationSnapEnabled })),
+  setRotationSnapIncrement: (increment) => set({ rotationSnapIncrement: increment }),
+  
+  // Wall/panel snapping
+  wallSnapEnabled: true,
+  wallSnapWeights: { start: 1.0, middle: 0.5, end: 1.0 },
+  setWallSnapEnabled: (enabled) => set({ wallSnapEnabled: enabled }),
+  toggleWallSnap: () => set((state) => ({ wallSnapEnabled: !state.wallSnapEnabled })),
+  setWallSnapWeights: (weights) => set({ wallSnapWeights: weights }),
+  setWallSnapWeight: (key, value) => set((state) => ({ 
+    wallSnapWeights: { ...state.wallSnapWeights, [key]: value }
+  })),
+  
   // Labels
   showFaceLabels: false,
   setShowFaceLabels: (show) => set({ showFaceLabels: show }),

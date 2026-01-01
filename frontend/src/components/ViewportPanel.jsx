@@ -4,8 +4,9 @@ import { useViewportStore } from '../stores/viewportStore'
 import { useThreeScene } from '../hooks/useThreeScene'
 import OptionsPanel from './OptionsPanel'
 import SelectionModeBar from './SelectionModeBar'
-import ToolbarButton from './ui/ToolbarButton'
-import { IconReset, IconSettings, IconPencil, IconUndo } from './ui/Icons'
+import SnapToolbar from './SnapToolbar'
+import { IconPencil, IconChevronDown } from './ui/Icons'
+import { Settings } from 'lucide-react'
 import './ViewportPanel.css'
 
 // Lazy load heavy AG Grid component
@@ -61,37 +62,40 @@ function ViewportPanel() {
         {/* Selection mode bar - centered at top (hidden in creation mode) */}
         {!creationMode && <SelectionModeBar />}
         
-        {/* Creation mode indicator */}
+        {/* Creation mode indicator - centered when active */}
         {creationMode && (
           <div className={`creation-mode-indicator ${!hasValidSelection ? 'warning' : ''}`}>
-            <span>🎨 Creation Mode</span>
+            <span>✏️ Creation Mode</span>
             {hasValidSelection ? (
-              <span className="creation-hint">Move mouse to preview • Snaps to panels • Hold Ctrl to disable snap • Escape to exit</span>
+              <span className="creation-hint">Click to place • Ctrl disables all snapping • Esc to exit</span>
             ) : (
-              <span className="creation-hint warning">⚠️ Select a panel first to extend from its endpoint</span>
+              <span className="creation-hint warning">⚠️ Select a panel first to extend from</span>
             )}
           </div>
         )}
         
-        {/* Toolbar overlay */}
-        <div className="viewport-toolbar">
-          <ToolbarButton
-            icon={<IconPencil />}
-            title={creationMode ? "Exit Creation Mode (Esc)" : "Enter Creation Mode"}
+        {/* Top-left toolbar: creation toggle + snap buttons */}
+        <div className="viewport-left-toolbar">
+          <button
+            className={`viewport-toolbar-btn creation-mode-toggle ${creationMode ? 'active' : ''}`}
             onClick={toggleCreationMode}
-            active={creationMode}
-          />
-          <ToolbarButton
-            icon={<IconReset />}
-            title="Reset View (F)"
-            onClick={resetView}
-          />
-          <ToolbarButton
-            icon={<IconSettings />}
-            title="View Options"
-            onClick={toggleOptionsPanel}
-          />
+            title={creationMode ? "Exit Creation Mode (Esc)" : "Enter Creation Mode"}
+          >
+            <IconPencil />
+          </button>
+          <SnapToolbar />
         </div>
+        
+        {/* Options dropdown button - top right */}
+        <button
+          className="viewport-toolbar-btn viewport-options-btn"
+          onClick={toggleOptionsPanel}
+          title="View Options"
+        >
+          <Settings size={14} />
+          <span>Options</span>
+          <IconChevronDown />
+        </button>
         
         <OptionsPanel />
       </div>
