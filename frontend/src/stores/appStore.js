@@ -138,6 +138,7 @@ export const useAppStore = create((set, get) => ({
   // parentRotation is the cumulative world rotation of the parent panel (in degrees)
   // snapInfo: optional { spanId, spanPoint } for snapping to another panel
   // attachInfo: optional { attachId, attachPoint } for attaching to a specific panel at a specific point
+  // Generates shorthand: attach="id:point" and span="id:point"
   //   When provided, the panel is always appended to the end and uses attach-id/attach-point
   // Returns: Promise that resolves with the new panel index when rendering is complete
   addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0, snapInfo = null, attachInfo = null) => {
@@ -166,19 +167,15 @@ export const useAppStore = create((set, get) => ({
     panelAttrs.push(`thickness="${thickness}"`)
     if (round(relativeAngle) !== 0) panelAttrs.push(`rotate="${round(relativeAngle)}"`)
     
-    // Add span attributes if snapping to another panel
+    // Add span attribute if snapping to another panel (shorthand format "id:point")
     if (snapInfo) {
-      panelAttrs.push(`span-id="${snapInfo.spanId}"`)
-      panelAttrs.push(`span-point="${snapInfo.spanPoint}"`)
+      panelAttrs.push(`span="${snapInfo.spanId}:${snapInfo.spanPoint}"`)
     }
     
-    // Add attach attributes if attaching to a non-sequential panel
+    // Add attach attribute if attaching to a non-sequential panel (shorthand format "id:point")
     if (attachInfo) {
-      panelAttrs.push(`attach-id="${attachInfo.attachId}"`)
-      // Only add attach-point if not at the default endpoint (1.0)
-      if (attachInfo.attachPoint !== undefined && attachInfo.attachPoint !== 1.0) {
-        panelAttrs.push(`attach-point="${round(attachInfo.attachPoint)}"`)
-      }
+      const attachPoint = attachInfo.attachPoint !== undefined ? round(attachInfo.attachPoint) : 1
+      panelAttrs.push(`attach="${attachInfo.attachId}:${attachPoint}"`)
     }
     
     const panelXml = `<panel ${panelAttrs.join(' ')}/>`
