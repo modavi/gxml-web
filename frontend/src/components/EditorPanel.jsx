@@ -7,6 +7,29 @@ import './EditorPanel.css'
 
 const AUTO_UPDATE_DELAY = 500
 
+// Helper to find which panel index the cursor is on
+function getPanelIndexAtPosition(model, position) {
+  const content = model.getValue()
+  const offset = model.getOffsetAt(position)
+  
+  // Find all panel tags with their positions
+  const panelRegex = /<panel\b[^>]*(?:\/>|>[\s\S]*?<\/panel>)/gi
+  let match
+  let panelIndex = 0
+  
+  while ((match = panelRegex.exec(content)) !== null) {
+    const startOffset = match.index
+    const endOffset = match.index + match[0].length
+    
+    if (offset >= startOffset && offset <= endOffset) {
+      return panelIndex
+    }
+    panelIndex++
+  }
+  
+  return null
+}
+
 function EditorPanel() {
   const {
     xmlContent,
@@ -18,14 +41,22 @@ function EditorPanel() {
     schema,
     setEditorRef,
     selectPanelInEditor,
+    highlightPanelInEditor,
   } = useAppStore()
   
   const selectedElementId = useViewportStore((state) => state.selectedElementId)
   const selectionMode = useViewportStore((state) => state.selectionMode)
+  const hoveredElementId = useViewportStore((state) => state.hoveredElementId)
+  const setSelectedElement = useViewportStore((state) => state.setSelectedElement)
+  const setHoveredElement = useViewportStore((state) => state.setHoveredElement)
+  const clearHover = useViewportStore((state) => state.clearHover)
   
   const timeoutRef = useRef(null)
   const editorRef = useRef(null)
+  const monacoRef = useRef(null)
   const schemaRef = useRef(schema)
+  const lastHoveredPanelRef = useRef(null)
+  const decorationsRef = useRef([])
 
   // Keep schemaRef in sync with latest schema
   useEffect(() => {
@@ -38,9 +69,15 @@ function EditorPanel() {
       selectPanelInEditor(selectedElementId)
     }
   }, [selectedElementId, selectionMode, selectPanelInEditor])
+  
+  // When element hover changes in viewport, highlight corresponding XML
+  useEffect(() => {
+    highlightPanelInEditor(hoveredElementId)
+  }, [hoveredElementId, highlightPanelInEditor])
 
   const handleEditorDidMount = useCallback((editor, monaco) => {
     editorRef.current = editor
+    monacoRef.current = monaco
     setEditorRef(editor)  // Store in appStore for cross-component access
     
     // Register GXML completion provider - use schemaRef to always get latest schema
@@ -55,7 +92,83 @@ function EditorPanel() {
     editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, () => {
       renderGXML()
     })
-  }, [renderGXML, setEditorRef])
+    
+    // Mouse move handler for hover highlighting
+    editor.onMouseMove((e) => {
+      if (!e.target?.position) {
+        // Mouse left text area
+        if (lastHoveredPanelRef.current !== null) {
+          lastHoveredPanelRef.current = null
+          clearHover()
+          // Clear decorations
+          decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [])
+        }
+        return
+      }
+      
+      const model = editor.getModel()
+      if (!model) return
+      
+      const panelIndex = getPanelIndexAtPosition(model, e.target.position)
+      
+      if (panelIndex !== lastHoveredPanelRef.current) {
+        lastHoveredPanelRef.current = panelIndex
+        
+        if (panelIndex !== null) {
+          setHoveredElement(panelIndex)
+          
+          // Add hover decoration to highlight the panel tag
+          const content = model.getValue()
+          const panelRegex = /<panel\b[^>]*(?:\/>|>[\s\S]*?<\/panel>)/gi
+          let match
+          let idx = 0
+          
+          while ((match = panelRegex.exec(content)) !== null) {
+            if (idx === panelIndex) {
+              const startPos = model.getPositionAt(match.index)
+              const endPos = model.getPositionAt(match.index + match[0].length)
+              
+              decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [{
+                range: new monaco.Range(startPos.lineNumber, startPos.column, endPos.lineNumber, endPos.column),
+                options: {
+                  className: 'xml-panel-hover',
+                  isWholeLine: false,
+                }
+              }])
+              break
+            }
+            idx++
+          }
+        } else {
+          clearHover()
+          decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [])
+        }
+      }
+    })
+    
+    // Mouse leave handler
+    editor.onMouseLeave(() => {
+      if (lastHoveredPanelRef.current !== null) {
+        lastHoveredPanelRef.current = null
+        clearHover()
+        decorationsRef.current = editor.deltaDecorations(decorationsRef.current, [])
+      }
+    })
+    
+    // Click handler for selection
+    editor.onMouseDown((e) => {
+      if (!e.target?.position) return
+      
+      const model = editor.getModel()
+      if (!model) return
+      
+      const panelIndex = getPanelIndexAtPosition(model, e.target.position)
+      
+      if (panelIndex !== null) {
+        setSelectedElement(panelIndex)
+      }
+    })
+  }, [renderGXML, setEditorRef, setHoveredElement, clearHover, setSelectedElement])
 
   const handleEditorChange = useCallback((value) => {
     setXmlContent(value || '')

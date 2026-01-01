@@ -103,3 +103,15 @@
   overflow-y: auto;
   border-top: 1px solid var(--error-border);
 }
+
+/* Panel hover highlight in editor (from editor hover) */
+.xml-panel-hover {
+  background-color: rgba(100, 149, 237, 0.15);
+  border-radius: 2px;
+}
+
+/* Panel hover highlight in editor (from viewport hover) */
+.xml-panel-viewport-hover {
+  background-color: rgba(100, 149, 237, 0.2);
+  border-left: 2px solid rgba(100, 149, 237, 0.6);
+}

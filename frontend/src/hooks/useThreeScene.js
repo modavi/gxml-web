@@ -149,8 +149,9 @@ export function useThreeScene(containerRef, geometryData) {
     const container = containerRef.current
     if (!container) return
 
-    const width = container.clientWidth
-    const height = container.clientHeight
+    // Get initial dimensions, default to reasonable size if not yet laid out
+    let width = container.clientWidth || 800
+    let height = container.clientHeight || 600
 
     // --------------------------------------------
     // Scene, Camera, Renderer Setup
@@ -520,6 +521,8 @@ export function useThreeScene(containerRef, geometryData) {
     const handleResize = () => {
       const w = container.clientWidth
       const h = container.clientHeight
+      if (w === 0 || h === 0) return  // Skip if container not yet sized
+      
       camera.aspect = w / h
       camera.updateProjectionMatrix()
       renderer.setSize(w, h)
@@ -532,6 +535,12 @@ export function useThreeScene(containerRef, geometryData) {
       previewBrushRef.current?.updateResolution(w, h)
     }
     window.addEventListener('resize', handleResize)
+    
+    // Use ResizeObserver to handle initial container sizing
+    const resizeObserver = new ResizeObserver(() => {
+      handleResize()
+    })
+    resizeObserver.observe(container)
 
     // --------------------------------------------
     // Mouse Event Handlers
@@ -981,6 +990,7 @@ export function useThreeScene(containerRef, geometryData) {
 
     // Cleanup
     return () => {
+      resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
       window.removeEventListener('keyup', handleKeyUp)
@@ -1323,7 +1333,7 @@ export function useThreeScene(containerRef, geometryData) {
     // Highlight selected element - all faces with matching panelId
     if (selectedElementId !== null && selectedElementId !== undefined) {
       geometryGroup.traverse((child) => {
-        if (child.isMesh && child.userData.isFill && child.userData.panelId === selectedElementId) {
+        if (child.isMesh && child.userData.isFill && String(child.userData.panelId) === String(selectedElementId)) {
           const baseColor = child.userData.baseColor
           if (baseColor) {
             const hsl = {}
@@ -1389,9 +1399,10 @@ export function useThreeScene(containerRef, geometryData) {
     
     // Helper to check if a face belongs to an element
     const faceMatchesElement = (faceId, elementId) => {
-      if (!elementId || !faceId) return false
-      // Face IDs are like "0-front", "0-back", etc. Element ID is "0"
-      return faceId.replace(/-(?:front|back|top|bottom|start|end)$/, '') === elementId
+      if (elementId === null || elementId === undefined || !faceId) return false
+      // Face IDs are like "0-front", "0-back", etc. Element ID is 0 (number)
+      const faceElementId = faceId.replace(/-(?:front|back|top|bottom|start|end|None)$/, '')
+      return String(faceElementId) === String(elementId)
     }
     
     // Clear previous hover highlight (if it was from spreadsheet)

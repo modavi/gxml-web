@@ -9,6 +9,65 @@ export const useAppStore = create((set, get) => ({
   editorRef: null,
   setEditorRef: (ref) => set({ editorRef: ref }),
   
+  // Hover decorations for editor
+  hoverDecorations: [],
+  setHoverDecorations: (decorations) => set({ hoverDecorations: decorations }),
+  
+  // Highlight panel in editor on hover (from viewport)
+  highlightPanelInEditor: (panelIndex) => {
+    const { xmlContent, editorRef, hoverDecorations } = get()
+    if (!editorRef) return
+    
+    // Clear existing hover decorations
+    if (panelIndex === null || panelIndex === undefined) {
+      const newDecorations = editorRef.deltaDecorations(hoverDecorations, [])
+      set({ hoverDecorations: newDecorations })
+      return
+    }
+    
+    // Convert to number if string
+    const index = typeof panelIndex === 'string' ? parseInt(panelIndex, 10) : panelIndex
+    if (isNaN(index)) return
+    
+    // Find the panel tag
+    const panelRegex = /<panel\b[^>]*(?:\/>|>[\s\S]*?<\/panel>)/gi
+    let match
+    let currentIndex = 0
+    
+    while ((match = panelRegex.exec(xmlContent)) !== null) {
+      if (currentIndex === index) {
+        // Convert character positions to line/column
+        const getLineCol = (pos) => {
+          const lines = xmlContent.substring(0, pos).split('\n')
+          return {
+            lineNumber: lines.length,
+            column: lines[lines.length - 1].length + 1
+          }
+        }
+        
+        const startLC = getLineCol(match.index)
+        const endLC = getLineCol(match.index + match[0].length)
+        
+        // Create hover decoration
+        const newDecorations = editorRef.deltaDecorations(hoverDecorations, [{
+          range: {
+            startLineNumber: startLC.lineNumber,
+            startColumn: startLC.column,
+            endLineNumber: endLC.lineNumber,
+            endColumn: endLC.column
+          },
+          options: {
+            className: 'xml-panel-viewport-hover',
+            isWholeLine: false,
+          }
+        }])
+        set({ hoverDecorations: newDecorations })
+        return
+      }
+      currentIndex++
+    }
+  },
+  
   // Select panel in editor by index (0-based, can be string or number)
   selectPanelInEditor: (panelIndex) => {
     const { xmlContent, editorRef } = get()
