@@ -5,6 +5,7 @@ import { useThreeScene } from '../hooks/useThreeScene'
 import OptionsPanel from './OptionsPanel'
 import SelectionModeBar from './SelectionModeBar'
 import SnapToolbar from './SnapToolbar'
+import AxisGizmo from './AxisGizmo'
 import { IconPencil, IconChevronDown } from './ui/Icons'
 import { Settings } from 'lucide-react'
 import './ViewportPanel.css'
@@ -27,7 +28,7 @@ function ViewportPanel() {
   
   const geometryData = useAppStore((state) => state.geometryData)
   
-  const { resetView } = useThreeScene(containerRef, geometryData)
+  const { resetView, cameraRef, controlsRef } = useThreeScene(containerRef, geometryData)
   
   // Check if we have a valid selected panel with endpoint
   const hasValidSelection = geometryData?.panels?.[selectedElementId]?.endPoint != null
@@ -98,6 +99,12 @@ function ViewportPanel() {
         </button>
         
         <OptionsPanel />
+        
+        {/* Axis gizmo - bottom left */}
+        <AxisGizmo 
+          camera={cameraRef.current} 
+          controls={controlsRef.current} 
+        />
       </div>
       
       {spreadsheetOpen && (

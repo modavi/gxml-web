@@ -1556,5 +1556,5 @@ export function useThreeScene(containerRef, geometryData) {
     controls.update()
   }, [])
 
-  return { resetView }
+  return { resetView, cameraRef, controlsRef }
 }
