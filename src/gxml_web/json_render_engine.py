@@ -84,7 +84,11 @@ class JSONRenderEngine(BaseRenderContext):
         # Convert points to list format
         point_list = []
         for p in points:
-            if hasattr(p, '__iter__'):
+            # Handle Vec3 objects (have x, y, z attributes) and sequences
+            if hasattr(p, 'x') and hasattr(p, 'y') and hasattr(p, 'z'):
+                point_list.append([float(p.x), float(p.y), float(p.z)])
+            elif hasattr(p, '__getitem__'):
+                # Handle tuples, lists, numpy arrays, etc.
                 point_list.append([float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0])
             else:
                 point_list.append([float(p[0]), float(p[1]), 0.0])
