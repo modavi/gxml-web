@@ -57,8 +57,8 @@ export const PREVIEW_PANEL = {
   gradientStrength: 0.7,
   
   // Bloom settings
-  bloomStrength: 0.55,
-  bloomRadius: 0.1,
+  bloomStrength: 1.0,
+  bloomRadius: 0.2,
   bloomThreshold: 0.0,
   bloomOpacity: 1.0,
   

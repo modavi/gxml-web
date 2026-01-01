@@ -1,13 +1,15 @@
-import { useEffect, useRef, useCallback } from 'react'
+import { useEffect, useRef, useCallback, lazy, Suspense } from 'react'
 import { useAppStore } from '../stores/appStore'
 import { useViewportStore } from '../stores/viewportStore'
 import { useThreeScene } from '../hooks/useThreeScene'
 import OptionsPanel from './OptionsPanel'
-import GeometrySpreadsheet from './GeometrySpreadsheet'
 import SelectionModeBar from './SelectionModeBar'
 import ToolbarButton from './ui/ToolbarButton'
 import { IconReset, IconSettings, IconPencil, IconUndo } from './ui/Icons'
 import './ViewportPanel.css'
+
+// Lazy load heavy AG Grid component
+const GeometrySpreadsheet = lazy(() => import('./GeometrySpreadsheet'))
 
 function ViewportPanel() {
   const containerRef = useRef(null)
@@ -94,7 +96,11 @@ function ViewportPanel() {
         <OptionsPanel />
       </div>
       
-      <GeometrySpreadsheet />
+      {spreadsheetOpen && (
+        <Suspense fallback={<div style={{ padding: '1rem', color: '#888' }}>Loading spreadsheet...</div>}>
+          <GeometrySpreadsheet />
+        </Suspense>
+      )}
     </div>
   )
 }

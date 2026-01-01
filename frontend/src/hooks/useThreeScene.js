@@ -162,11 +162,15 @@ export function useThreeScene(containerRef, geometryData) {
 
     // ============================================
     // Selective Bloom Setup with Depth-Aware Compositing
-    // Render scene normally, then overlay glow from bloom-layer objects
-    // only where they are not occluded by main scene geometry
+    // Pipeline:
+    // 1. Render main scene → capture depth
+    // 2. Render bloom objects → capture color + depth  
+    // 3. Depth-mask the bloom objects (remove occluded pixels)
+    // 4. Apply bloom/glow to the MASKED result
+    // 5. Simple additive composite on top of main scene
     // ============================================
     
-    // Render targets for depth-aware compositing
+    // Render target for main scene depth
     const mainRenderTarget = new THREE.WebGLRenderTarget(width, height, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
@@ -176,44 +180,36 @@ export function useThreeScene(containerRef, geometryData) {
     mainRenderTarget.depthTexture.format = THREE.DepthFormat
     mainRenderTarget.depthTexture.type = THREE.UnsignedShortType
     
-    const bloomDepthTarget = new THREE.WebGLRenderTarget(width, height, {
+    // Render target for bloom objects (color + depth)
+    const bloomObjectsTarget = new THREE.WebGLRenderTarget(width, height, {
       minFilter: THREE.LinearFilter,
       magFilter: THREE.LinearFilter,
       format: THREE.RGBAFormat,
       depthTexture: new THREE.DepthTexture(width, height),
     })
-    bloomDepthTarget.depthTexture.format = THREE.DepthFormat
-    bloomDepthTarget.depthTexture.type = THREE.UnsignedShortType
+    bloomObjectsTarget.depthTexture.format = THREE.DepthFormat
+    bloomObjectsTarget.depthTexture.type = THREE.UnsignedShortType
     
-    // Bloom scene - a separate scene containing only objects that should glow
+    // Render target for depth-masked bloom objects (before blur)
+    const maskedBloomTarget = new THREE.WebGLRenderTarget(width, height, {
+      minFilter: THREE.LinearFilter,
+      magFilter: THREE.LinearFilter,
+      format: THREE.RGBAFormat,
+    })
+    
+    // Bloom scene - contains only objects that should glow
     const bloomScene = new THREE.Scene()
-    bloomScene.background = null  // Transparent/black
+    bloomScene.background = new THREE.Color(0x000000)
     
-    // Bloom composer - renders bloom scene to internal render targets
-    const bloomRenderPass = new RenderPass(bloomScene, camera)
-    const bloomPass = new UnrealBloomPass(
-      new THREE.Vector2(width, height),
-      PREVIEW_PANEL.bloomStrength,
-      PREVIEW_PANEL.bloomRadius,
-      PREVIEW_PANEL.bloomThreshold
-    )
-    
-    const bloomComposer = new EffectComposer(renderer)
-    bloomComposer.renderToScreen = false
-    bloomComposer.addPass(bloomRenderPass)
-    bloomComposer.addPass(bloomPass)
-    bloomComposerRef.current = bloomComposer
-    
-    // Create a fullscreen quad for depth-aware bloom compositing
-    const bloomQuadGeo = new THREE.PlaneGeometry(2, 2)
-    const bloomQuadMat = new THREE.ShaderMaterial({
-      uniforms: { 
-        bloomTexture: { value: null },
-        mainDepthTexture: { value: null },
+    // Depth masking shader - masks bloom objects by main scene depth
+    const depthMaskQuadGeo = new THREE.PlaneGeometry(2, 2)
+    const depthMaskQuadMat = new THREE.ShaderMaterial({
+      uniforms: {
+        bloomColorTexture: { value: null },
         bloomDepthTexture: { value: null },
-        opacity: { value: PREVIEW_PANEL.bloomOpacity },
+        mainDepthTexture: { value: null },
         cameraNear: { value: camera.near },
-        cameraFar: { value: camera.far }
+        cameraFar: { value: camera.far },
       },
       vertexShader: `
         varying vec2 vUv;
@@ -223,10 +219,9 @@ export function useThreeScene(containerRef, geometryData) {
         }
       `,
       fragmentShader: `
-        uniform sampler2D bloomTexture;
-        uniform sampler2D mainDepthTexture;
+        uniform sampler2D bloomColorTexture;
         uniform sampler2D bloomDepthTexture;
-        uniform float opacity;
+        uniform sampler2D mainDepthTexture;
         uniform float cameraNear;
         uniform float cameraFar;
         varying vec2 vUv;
@@ -239,17 +234,62 @@ export function useThreeScene(containerRef, geometryData) {
         void main() {
           float mainDepth = texture2D(mainDepthTexture, vUv).r;
           float bloomDepth = texture2D(bloomDepthTexture, vUv).r;
+          vec4 bloomColor = texture2D(bloomColorTexture, vUv);
           
           // Linearize depths for comparison
           float mainLinear = linearizeDepth(mainDepth);
           float bloomLinear = linearizeDepth(bloomDepth);
           
-          // Only show bloom where bloom objects are in front of (or at same depth as) main scene
-          // Add small bias to avoid z-fighting
+          // Only show bloom pixels that are in front of main scene
           float visible = step(bloomLinear, mainLinear + 0.01);
           
+          gl_FragColor = vec4(bloomColor.rgb * visible, 1.0);
+        }
+      `,
+      depthTest: false,
+      depthWrite: false,
+    })
+    const depthMaskQuad = new THREE.Mesh(depthMaskQuadGeo, depthMaskQuadMat)
+    const depthMaskScene = new THREE.Scene()
+    depthMaskScene.add(depthMaskQuad)
+    
+    // Bloom composer - applies bloom to the MASKED bloom objects
+    const maskedBloomPass = new RenderPass(depthMaskScene, new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1))
+    const bloomPass = new UnrealBloomPass(
+      new THREE.Vector2(width, height),
+      PREVIEW_PANEL.bloomStrength,
+      PREVIEW_PANEL.bloomRadius,
+      PREVIEW_PANEL.bloomThreshold
+    )
+    
+    const bloomComposer = new EffectComposer(renderer)
+    bloomComposer.renderToScreen = false
+    bloomComposer.addPass(maskedBloomPass)
+    bloomComposer.addPass(bloomPass)
+    bloomComposerRef.current = bloomComposer
+    
+    // Final composite quad - simple additive blend
+    const compositeQuadGeo = new THREE.PlaneGeometry(2, 2)
+    const compositeQuadMat = new THREE.ShaderMaterial({
+      uniforms: { 
+        bloomTexture: { value: null },
+        opacity: { value: PREVIEW_PANEL.bloomOpacity },
+      },
+      vertexShader: `
+        varying vec2 vUv;
+        void main() {
+          vUv = uv;
+          gl_Position = vec4(position.xy, 0.0, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform sampler2D bloomTexture;
+        uniform float opacity;
+        varying vec2 vUv;
+        
+        void main() {
           vec4 bloom = texture2D(bloomTexture, vUv);
-          gl_FragColor = bloom * opacity * visible;
+          gl_FragColor = vec4(bloom.rgb * opacity, 1.0);
         }
       `,
       transparent: true,
@@ -257,19 +297,21 @@ export function useThreeScene(containerRef, geometryData) {
       depthTest: false,
       depthWrite: false
     })
-    const bloomQuad = new THREE.Mesh(bloomQuadGeo, bloomQuadMat)
-    const bloomQuadScene = new THREE.Scene()
-    const bloomQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
-    bloomQuadScene.add(bloomQuad)
+    const compositeQuad = new THREE.Mesh(compositeQuadGeo, compositeQuadMat)
+    const compositeQuadScene = new THREE.Scene()
+    const compositeQuadCamera = new THREE.OrthographicCamera(-1, 1, 1, -1, 0, 1)
+    compositeQuadScene.add(compositeQuad)
     
     // Store bloom data on scene
     scene.userData.bloomScene = bloomScene
     scene.userData.bloomComposer = bloomComposer
-    scene.userData.bloomQuad = bloomQuad
-    scene.userData.bloomQuadScene = bloomQuadScene
-    scene.userData.bloomQuadCamera = bloomQuadCamera
+    scene.userData.depthMaskQuad = depthMaskQuad
+    scene.userData.compositeQuad = compositeQuad
+    scene.userData.compositeQuadScene = compositeQuadScene
+    scene.userData.compositeQuadCamera = compositeQuadCamera
     scene.userData.mainRenderTarget = mainRenderTarget
-    scene.userData.bloomDepthTarget = bloomDepthTarget
+    scene.userData.bloomObjectsTarget = bloomObjectsTarget
+    scene.userData.maskedBloomTarget = maskedBloomTarget
 
     // Controls
     const controls = new OrbitControls(camera, renderer.domElement)
@@ -292,6 +334,8 @@ export function useThreeScene(containerRef, geometryData) {
 
     // Grid - Blender style subtle grid
     const gridHelper = new THREE.GridHelper(4, 20, 0x3d3d3d, 0x303030)
+    gridHelper.renderOrder = -1  // Render before other objects
+    gridHelper.material.depthWrite = false  // Don't write to depth buffer
     scene.add(gridHelper)
 
     // Axes - smaller, Blender-style
@@ -382,9 +426,9 @@ export function useThreeScene(containerRef, geometryData) {
       const hasBloomObjects = previewBrush?.visible
       
       if (hasBloomObjects) {
-        const { bloomScene, bloomComposer, bloomQuad, bloomQuadScene, bloomQuadCamera, mainRenderTarget, bloomDepthTarget } = scene.userData
+        const { bloomScene, bloomComposer, depthMaskQuad, compositeQuad, compositeQuadScene, compositeQuadCamera, mainRenderTarget, bloomObjectsTarget } = scene.userData
         
-        // Step 1: Copy bloom objects to bloom scene FIRST
+        // Step 1: Copy bloom objects to bloom scene
         while (bloomScene.children.length > 0) {
           bloomScene.remove(bloomScene.children[0])
         }
@@ -395,6 +439,10 @@ export function useThreeScene(containerRef, geometryData) {
           previewMesh.traverse((child) => {
             if (child.layers.isEnabled(BLOOM_LAYER)) {
               const temp = child.clone()
+              if (temp.material) {
+                temp.material = temp.material.clone()
+                temp.material.depthWrite = true
+              }
               child.getWorldPosition(temp.position)
               child.getWorldQuaternion(temp.quaternion)
               child.getWorldScale(temp.scale)
@@ -406,6 +454,10 @@ export function useThreeScene(containerRef, geometryData) {
         previewBrush.getMarkers().forEach(marker => {
           if (marker.layers.isEnabled(BLOOM_LAYER)) {
             const temp = marker.clone()
+            if (temp.material) {
+              temp.material = temp.material.clone()
+              temp.material.depthWrite = true
+            }
             marker.getWorldPosition(temp.position)
             bloomScene.add(temp)
           }
@@ -415,28 +467,33 @@ export function useThreeScene(containerRef, geometryData) {
         renderer.setRenderTarget(mainRenderTarget)
         renderer.render(scene, camera)
         
-        // Step 3: Render bloom scene to capture its depth
-        renderer.setRenderTarget(bloomDepthTarget)
+        // Step 3: Render bloom objects to capture color + depth
+        renderer.setRenderTarget(bloomObjectsTarget)
+        renderer.setClearColor(0x000000, 1)
+        renderer.clear()
         renderer.render(bloomScene, camera)
         
-        // Step 4: Render bloom pass (glow effect)
+        // Step 4: Depth-mask the bloom objects (update uniforms for masking pass)
+        depthMaskQuad.material.uniforms.bloomColorTexture.value = bloomObjectsTarget.texture
+        depthMaskQuad.material.uniforms.bloomDepthTexture.value = bloomObjectsTarget.depthTexture
+        depthMaskQuad.material.uniforms.mainDepthTexture.value = mainRenderTarget.depthTexture
+        depthMaskQuad.material.uniforms.cameraNear.value = camera.near
+        depthMaskQuad.material.uniforms.cameraFar.value = camera.far
+        
+        // Step 5: Apply bloom to the masked result (bloom composer reads from depthMaskQuad)
         renderer.setRenderTarget(null)
         bloomComposer.render()
         const bloomTexture = bloomComposer.readBuffer.texture
         
-        // Step 5: Render main scene to screen
+        // Step 6: Render main scene to screen
         renderer.setRenderTarget(null)
         renderer.render(scene, camera)
         
-        // Step 6: Composite bloom with depth-aware masking
-        bloomQuad.material.uniforms.bloomTexture.value = bloomTexture
-        bloomQuad.material.uniforms.mainDepthTexture.value = mainRenderTarget.depthTexture
-        bloomQuad.material.uniforms.bloomDepthTexture.value = bloomDepthTarget.depthTexture
-        bloomQuad.material.uniforms.cameraNear.value = camera.near
-        bloomQuad.material.uniforms.cameraFar.value = camera.far
+        // Step 7: Simple additive composite of bloomed result
+        compositeQuad.material.uniforms.bloomTexture.value = bloomTexture
         
         renderer.autoClear = false
-        renderer.render(bloomQuadScene, bloomQuadCamera)
+        renderer.render(compositeQuadScene, compositeQuadCamera)
         renderer.autoClear = true
       } else {
         // Normal rendering (no bloom)
@@ -458,7 +515,8 @@ export function useThreeScene(containerRef, geometryData) {
       renderer.setSize(w, h)
       scene.userData.bloomComposer?.setSize(w, h)
       scene.userData.mainRenderTarget?.setSize(w, h)
-      scene.userData.bloomDepthTarget?.setSize(w, h)
+      scene.userData.bloomObjectsTarget?.setSize(w, h)
+      scene.userData.maskedBloomTarget?.setSize(w, h)
       labelRenderer.setSize(w, h)
       // Update LineMaterial resolution for preview brush
       previewBrushRef.current?.updateResolution(w, h)
@@ -601,7 +659,7 @@ export function useThreeScene(containerRef, geometryData) {
       
       // Initialize PreviewBrush if needed
       if (!previewBrushRef.current) {
-        previewBrushRef.current = new PreviewBrush(scene)
+        previewBrushRef.current = new PreviewBrush(scene, containerRef.current)
       }
       
       // Update preview with current endpoint and mouse position
@@ -628,6 +686,11 @@ export function useThreeScene(containerRef, geometryData) {
           return
         }
         
+        // Don't allow new creation while previous is pending
+        if (previewBrushRef.current?.isPending) {
+          return
+        }
+        
         // Use XZ plane (floor) for creation
         const clickPoint = raycastToXZPlane()
         if (!clickPoint) return
@@ -638,6 +701,9 @@ export function useThreeScene(containerRef, geometryData) {
         const dist = Math.sqrt(dx * dx + dz * dz)
         
         if (dist >= 0.05) {
+          // Lock the preview in place and show spinner
+          previewBrushRef.current?.setPending(true)
+          
           // Create the panel, inserted after the selected panel
           // Start at endpoint, end at click position (use endpoint.y for height)
           const startPoint = { x: endpoint.x, y: endpoint.y, z: endpoint.z }
@@ -647,6 +713,9 @@ export function useThreeScene(containerRef, geometryData) {
           // addPanelFromPoints is now async and returns the new panel index
           appStore.addPanelFromPoints(startPoint, endPointCoord, endpoint.panelIndex, 0.25, endpoint.worldRotation)
             .then((newPanelIndex) => {
+              // Clear pending state
+              previewBrushRef.current?.setPending(false)
+              
               if (newPanelIndex !== null) {
                 // Clear the preview marker so it gets recreated at new position
                 previewBrushRef.current?.clearMarkers()
@@ -662,6 +731,11 @@ export function useThreeScene(containerRef, geometryData) {
                   updateCreationPreview()
                 }, 50)
               }
+            })
+            .catch((err) => {
+              // Clear pending state on error too
+              previewBrushRef.current?.setPending(false)
+              console.error('Failed to create panel:', err)
             })
         }
         return
@@ -1085,6 +1159,9 @@ export function useThreeScene(containerRef, geometryData) {
       })
     }
     
+    // Skip selection highlighting in creation mode - the orange highlight is distracting
+    if (creationMode) return
+    
     // Highlight selected element - all faces with matching panelId
     if (selectedElementId !== null && selectedElementId !== undefined) {
       geometryGroup.traverse((child) => {
@@ -1131,7 +1208,7 @@ export function useThreeScene(containerRef, geometryData) {
         }
       })
     }
-  }, [selectedElementId, selectedFaceId, selectedVertexIdx, selectionMode])
+  }, [selectedElementId, selectedFaceId, selectedVertexIdx, selectionMode, creationMode])
 
   // Handle hover highlighting from spreadsheet
   useEffect(() => {

@@ -13,6 +13,32 @@ import { LineMaterial } from 'three/examples/jsm/lines/LineMaterial'
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2'
 import { BLOOM_LAYER, PREVIEW_PANEL } from './constants'
 
+// Inject CSS for spinner animation (only once)
+if (typeof document !== 'undefined' && !document.getElementById('preview-brush-spinner-style')) {
+  const style = document.createElement('style')
+  style.id = 'preview-brush-spinner-style'
+  style.textContent = `
+    @keyframes preview-brush-spin {
+      from { transform: rotate(0deg); }
+      to { transform: rotate(360deg); }
+    }
+    .preview-brush-spinner {
+      position: absolute;
+      bottom: 20px;
+      right: 20px;
+      width: 32px;
+      height: 32px;
+      border: 3px solid rgba(255, 140, 0, 0.5);
+      border-top-color: #ff9922;
+      border-radius: 50%;
+      animation: preview-brush-spin 0.8s linear infinite;
+      z-index: 10000;
+      pointer-events: none;
+    }
+  `
+  document.head.appendChild(style)
+}
+
 /**
  * Creates the holographic shader material for fancy preview mode
  * @returns {THREE.ShaderMaterial}
@@ -154,11 +180,14 @@ function createSimpleWireframe(parentMesh, geometry) {
  * PreviewBrush class - manages creation mode preview visualization
  */
 export class PreviewBrush {
-  constructor(scene) {
+  constructor(scene, container) {
     this.scene = scene
+    this.container = container  // DOM container for spinner positioning
     this.mesh = null
     this.markers = []
     this.useFancyMode = PREVIEW_PANEL.fancyPreview
+    this.pending = false  // When true, position is locked waiting for panel creation
+    this.spinnerElement = null  // DOM spinner element
   }
 
   /**
@@ -217,11 +246,54 @@ export class PreviewBrush {
   }
 
   /**
+   * Create the DOM spinner element
+   * @private
+   */
+  _createSpinner() {
+    if (this.spinnerElement) return
+    if (!this.container) return
+    
+    // Ensure container has relative positioning for absolute child
+    if (getComputedStyle(this.container).position === 'static') {
+      this.container.style.position = 'relative'
+    }
+    
+    this.spinnerElement = document.createElement('div')
+    this.spinnerElement.className = 'preview-brush-spinner'
+    this.spinnerElement.style.display = 'none'
+    this.container.appendChild(this.spinnerElement)
+  }
+
+  /**
+   * Show the spinner
+   * @private
+   */
+  _showSpinner() {
+    this._createSpinner()
+    if (this.spinnerElement) {
+      this.spinnerElement.style.display = 'block'
+    }
+  }
+
+  /**
+   * Hide the spinner
+   * @private
+   */
+  _hideSpinner() {
+    if (this.spinnerElement) {
+      this.spinnerElement.style.display = 'none'
+    }
+  }
+
+  /**
    * Update the preview based on endpoint and mouse position
    * @param {Object|null} endpoint - Start endpoint {x, y, z, panelIndex, worldRotation}
    * @param {THREE.Vector3|null} mousePoint - Mouse position in world space (XZ plane)
    */
   update(endpoint, mousePoint) {
+    // Don't update position when pending (waiting for panel creation)
+    if (this.pending) return
+    
     // Hide if no valid endpoint or mouse position
     if (!endpoint || !mousePoint) {
       this.hide()
@@ -316,6 +388,43 @@ export class PreviewBrush {
   }
 
   /**
+   * Set pending state - locks preview position and shows spinner
+   */
+  setPending(isPending) {
+    this.pending = isPending
+    
+    if (isPending && this.mesh?.visible) {
+      // Show fixed-position spinner
+      this._showSpinner()
+      
+      // Reduce opacity of preview to indicate it's "pending"
+      if (this.mesh.material.uniforms?.opacity) {
+        this.mesh.material.uniforms.opacity.value = PREVIEW_PANEL.opacity * 0.6
+      } else if (this.mesh.material.opacity !== undefined) {
+        this.mesh.material.opacity = PREVIEW_PANEL.simpleOpacity * 0.6
+      }
+    } else {
+      // Hide spinner
+      this._hideSpinner()
+      
+      // Restore opacity
+      if (this.mesh?.material.uniforms?.opacity) {
+        this.mesh.material.uniforms.opacity.value = PREVIEW_PANEL.opacity
+      } else if (this.mesh?.material.opacity !== undefined) {
+        this.mesh.material.opacity = PREVIEW_PANEL.simpleOpacity
+      }
+    }
+  }
+
+  /**
+   * Check if in pending state
+   * @returns {boolean}
+   */
+  get isPending() {
+    return this.pending
+  }
+
+  /**
    * Update line material resolution on resize
    * @param {number} width
    * @param {number} height
@@ -334,6 +443,12 @@ export class PreviewBrush {
    * Dispose all resources
    */
   dispose() {
+    // Remove DOM spinner
+    if (this.spinnerElement) {
+      this.spinnerElement.remove()
+      this.spinnerElement = null
+    }
+    
     if (this.mesh) {
       this.scene.remove(this.mesh)
       this.mesh.traverse(child => {
@@ -350,5 +465,6 @@ export class PreviewBrush {
     }
 
     this.clearMarkers()
+    this.pending = false
   }
 }

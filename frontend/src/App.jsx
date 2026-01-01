@@ -1,10 +1,19 @@
-import { useEffect } from 'react'
+import { useEffect, lazy, Suspense } from 'react'
 import { useAppStore } from './stores/appStore'
-import EditorPanel from './components/EditorPanel'
 import ViewportPanel from './components/ViewportPanel'
-import DetailsPanel from './components/DetailsPanel'
 import Resizer from './components/Resizer'
 import './styles/App.css'
+
+// Lazy load heavy components (Monaco Editor, AG Grid)
+const EditorPanel = lazy(() => import('./components/EditorPanel'))
+const DetailsPanel = lazy(() => import('./components/DetailsPanel'))
+
+// Simple loading placeholder
+const LoadingPanel = () => (
+  <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', height: '100%', color: '#888' }}>
+    Loading...
+  </div>
+)
 
 function App() {
   const loadSchema = useAppStore((state) => state.loadSchema)
@@ -18,11 +27,15 @@ function App() {
 
   return (
     <div className="app-container">
-      <EditorPanel />
+      <Suspense fallback={<LoadingPanel />}>
+        <EditorPanel />
+      </Suspense>
       <Resizer side="left" />
       <ViewportPanel />
       <Resizer side="right" />
-      <DetailsPanel />
+      <Suspense fallback={<LoadingPanel />}>
+        <DetailsPanel />
+      </Suspense>
     </div>
   )
 }
