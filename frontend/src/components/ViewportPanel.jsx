@@ -66,7 +66,7 @@ function ViewportPanel() {
           <div className={`creation-mode-indicator ${!hasValidSelection ? 'warning' : ''}`}>
             <span>🎨 Creation Mode</span>
             {hasValidSelection ? (
-              <span className="creation-hint">Move mouse to preview • Click to create panel • Escape to exit</span>
+              <span className="creation-hint">Move mouse to preview • Snaps to panels • Hold Ctrl to disable snap • Escape to exit</span>
             ) : (
               <span className="creation-hint warning">⚠️ Select a panel first to extend from its endpoint</span>
             )}

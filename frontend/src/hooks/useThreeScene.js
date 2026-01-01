@@ -25,6 +25,7 @@ import {
   applyHoverHighlight,
   resetToBaseColor,
   PreviewBrush,
+  SnapHelper,
 } from './three'
 
 // ============================================
@@ -69,6 +70,8 @@ export function useThreeScene(containerRef, geometryData) {
   
   // Creation mode refs
   const previewBrushRef = useRef(null)  // PreviewBrush instance
+  const snapHelperRef = useRef(null)    // SnapHelper instance for snapping to panels
+  const ctrlKeyRef = useRef(false)      // Track ctrl key state for disabling snap
   const xyPlaneRef = useRef(new THREE.Plane(new THREE.Vector3(0, 0, 1), 0))  // XY plane at z=0
 
   // ============================================
@@ -128,6 +131,10 @@ export function useThreeScene(containerRef, geometryData) {
       if (previewBrushRef.current) {
         previewBrushRef.current.dispose()
         previewBrushRef.current = null
+      }
+      // Clear snap helper visuals
+      if (snapHelperRef.current) {
+        snapHelperRef.current.clear()
       }
     }
   }, [creationMode, panelChain.length])
@@ -643,10 +650,13 @@ export function useThreeScene(containerRef, geometryData) {
     // Helper: Create or update preview panel (emerges from selected panel endpoint)
     const updateCreationPreview = () => {
       const endpoint = getSelectedPanelEndpoint()
+      const appStore = useAppStore.getState()
+      const geometryData = appStore.geometryData
       
       // Must have a selected panel to create from
       if (!endpoint) {
         previewBrushRef.current?.hide()
+        snapHelperRef.current?.clear()
         return
       }
       
@@ -654,6 +664,7 @@ export function useThreeScene(containerRef, geometryData) {
       const mousePoint = raycastToXZPlane()
       if (!mousePoint) {
         previewBrushRef.current?.hide()
+        snapHelperRef.current?.clear()
         return
       }
       
@@ -662,8 +673,34 @@ export function useThreeScene(containerRef, geometryData) {
         previewBrushRef.current = new PreviewBrush(scene, containerRef.current)
       }
       
-      // Update preview with current endpoint and mouse position
-      previewBrushRef.current.update(endpoint, mousePoint)
+      // Initialize SnapHelper if needed
+      if (!snapHelperRef.current) {
+        snapHelperRef.current = new SnapHelper(scene)
+      }
+      
+      // Check for snap target (unless ctrl is held)
+      let targetPoint = mousePoint
+      if (!ctrlKeyRef.current) {
+        const snapResult = snapHelperRef.current.findSnapTarget(
+          mousePoint,
+          geometryData,
+          endpoint.panelIndex  // Exclude the source panel
+        )
+        
+        // Update snap visuals
+        snapHelperRef.current.updateVisuals(snapResult, geometryGroupRef.current)
+        
+        // Use snap point if found
+        if (snapResult) {
+          targetPoint = snapResult.worldPoint
+        }
+      } else {
+        // Ctrl held - clear snap visuals
+        snapHelperRef.current.clear()
+      }
+      
+      // Update preview with current endpoint and target position
+      previewBrushRef.current.update(endpoint, targetPoint)
     }
     
     // Click handler for selection OR creation
@@ -695,23 +732,44 @@ export function useThreeScene(containerRef, geometryData) {
         const clickPoint = raycastToXZPlane()
         if (!clickPoint) return
         
+        // Check for snap (unless ctrl is held)
+        let targetPoint = clickPoint
+        let snapInfo = null
+        if (!ctrlKeyRef.current && snapHelperRef.current) {
+          const snapResult = snapHelperRef.current.findSnapTarget(
+            clickPoint,
+            appStore.geometryData,
+            endpoint.panelIndex
+          )
+          if (snapResult) {
+            targetPoint = snapResult.worldPoint
+            snapInfo = {
+              spanId: snapResult.panelIndex,
+              spanPoint: snapResult.spanPoint,
+            }
+          }
+        }
+        
         // Calculate distance in XZ plane
-        const dx = clickPoint.x - endpoint.x
-        const dz = clickPoint.z - endpoint.z
+        const dx = targetPoint.x - endpoint.x
+        const dz = targetPoint.z - endpoint.z
         const dist = Math.sqrt(dx * dx + dz * dz)
         
         if (dist >= 0.05) {
           // Lock the preview in place and show spinner
           previewBrushRef.current?.setPending(true)
           
+          // Clear snap visuals
+          snapHelperRef.current?.clear()
+          
           // Create the panel, inserted after the selected panel
-          // Start at endpoint, end at click position (use endpoint.y for height)
+          // Start at endpoint, end at target position (use endpoint.y for height)
           const startPoint = { x: endpoint.x, y: endpoint.y, z: endpoint.z }
-          const endPointCoord = { x: clickPoint.x, y: endpoint.y, z: clickPoint.z }
+          const endPointCoord = { x: targetPoint.x, y: endpoint.y, z: targetPoint.z }
           
           // Pass parent's world rotation so the relative rotation is calculated correctly
           // addPanelFromPoints is now async and returns the new panel index
-          appStore.addPanelFromPoints(startPoint, endPointCoord, endpoint.panelIndex, 0.25, endpoint.worldRotation)
+          appStore.addPanelFromPoints(startPoint, endPointCoord, endpoint.panelIndex, 0.25, endpoint.worldRotation, snapInfo)
             .then((newPanelIndex) => {
               // Clear pending state
               previewBrushRef.current?.setPending(false)
@@ -831,9 +889,27 @@ export function useThreeScene(containerRef, geometryData) {
     renderer.domElement.addEventListener('pointermove', handlePointerMove)
     renderer.domElement.addEventListener('pointerup', handlePointerUp)
 
+    // Track ctrl key for snap disable
+    const handleKeyDown = (e) => {
+      if (e.key === 'Control') {
+        ctrlKeyRef.current = true
+      }
+    }
+    
+    const handleKeyUp = (e) => {
+      if (e.key === 'Control') {
+        ctrlKeyRef.current = false
+      }
+    }
+    
+    window.addEventListener('keydown', handleKeyDown)
+    window.addEventListener('keyup', handleKeyUp)
+
     // Cleanup
     return () => {
       window.removeEventListener('resize', handleResize)
+      window.removeEventListener('keydown', handleKeyDown)
+      window.removeEventListener('keyup', handleKeyUp)
       renderer.domElement.removeEventListener('mousedown', handleMouseDown)
       renderer.domElement.removeEventListener('mousemove', handleMouseMove)
       renderer.domElement.removeEventListener('mousemove', handleMouseMoveForDrag)
@@ -842,6 +918,10 @@ export function useThreeScene(containerRef, geometryData) {
       renderer.domElement.removeEventListener('pointerdown', handlePointerDown)
       renderer.domElement.removeEventListener('pointermove', handlePointerMove)
       renderer.domElement.removeEventListener('pointerup', handlePointerUp)
+      
+      // Dispose snap helper
+      snapHelperRef.current?.dispose()
+      snapHelperRef.current = null
       
       if (animationFrameRef.current) {
         cancelAnimationFrame(animationFrameRef.current)

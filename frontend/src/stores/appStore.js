@@ -77,8 +77,9 @@ export const useAppStore = create((set, get) => ({
   // Add a panel from creation mode - inserted after selectedPanelIndex
   // startPoint and endPoint are in world XZ coordinates (floor plane)
   // parentRotation is the cumulative world rotation of the parent panel (in degrees)
+  // snapInfo: optional { spanId, spanPoint } for snapping to another panel
   // Returns: Promise that resolves with the new panel index when rendering is complete
-  addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0) => {
+  addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0, snapInfo = null) => {
     const { xmlContent, setXmlContent, renderGXML, isAutoUpdate } = get()
     
     // Calculate panel properties from two points in XZ plane
@@ -103,6 +104,12 @@ export const useAppStore = create((set, get) => ({
     panelAttrs.push(`width="${round(width)}"`)
     panelAttrs.push(`thickness="${thickness}"`)
     if (round(relativeAngle) !== 0) panelAttrs.push(`rotate="${round(relativeAngle)}"`)
+    
+    // Add span attributes if snapping to another panel
+    if (snapInfo) {
+      panelAttrs.push(`span-id="${snapInfo.spanId}"`)
+      panelAttrs.push(`span-point="${snapInfo.spanPoint}"`)
+    }
     
     const panelXml = `<panel ${panelAttrs.join(' ')}/>`
     
