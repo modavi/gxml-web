@@ -81,34 +81,39 @@ class JSONRenderEngine(BaseRenderContext):
             points: List of 3D points [(x,y,z), ...]
             geoKey: Optional geometry group key
         """
-        # Convert points to list format
+        # Convert points to list format - optimized for common tuple case
         point_list = []
-        for p in points:
-            # Handle Vec3 objects (have x, y, z attributes) and sequences
-            if hasattr(p, 'x') and hasattr(p, 'y') and hasattr(p, 'z'):
-                point_list.append([float(p.x), float(p.y), float(p.z)])
-            elif hasattr(p, '__getitem__'):
-                # Handle tuples, lists, numpy arrays, etc.
-                point_list.append([float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0])
-            else:
-                point_list.append([float(p[0]), float(p[1]), 0.0])
+        min_x = min_y = min_z = float('inf')
+        max_x = max_y = max_z = float('-inf')
         
-        # Calculate bounding box to determine size
+        for p in points:
+            # Fast path for tuples/lists (most common)
+            try:
+                x, y, z = float(p[0]), float(p[1]), float(p[2]) if len(p) > 2 else 0.0
+            except (TypeError, KeyError):
+                # Slow path for Vec3 objects
+                if hasattr(p, 'x'):
+                    x, y, z = float(p.x), float(p.y), float(p.z)
+                else:
+                    x, y, z = float(p[0]), float(p[1]), 0.0
+            
+            point_list.append([x, y, z])
+            
+            # Track bounding box inline
+            if x < min_x: min_x = x
+            if x > max_x: max_x = x
+            if y < min_y: min_y = y
+            if y > max_y: max_y = y
+            if z < min_z: min_z = z
+            if z > max_z: max_z = z
+        
+        # Calculate center and size from tracked bounds
         if point_list:
-            xs = [p[0] for p in point_list]
-            ys = [p[1] for p in point_list]
-            zs = [p[2] for p in point_list]
-            
-            min_x, max_x = min(xs), max(xs)
-            min_y, max_y = min(ys), max(ys)
-            min_z, max_z = min(zs), max(zs)
-            
             center = [
                 (min_x + max_x) / 2,
                 (min_y + max_y) / 2,
                 (min_z + max_z) / 2,
             ]
-            
             size = [
                 max_x - min_x,
                 max_y - min_y,
