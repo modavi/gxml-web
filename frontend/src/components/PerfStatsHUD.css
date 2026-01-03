@@ -1,0 +1,85 @@
+.perf-stats-hud {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  background: rgba(0, 0, 0, 0.85);
+  color: #e0e0e0;
+  padding: 12px;
+  border-radius: 6px;
+  font-family: 'Monaco', 'Menlo', 'Consolas', monospace;
+  font-size: 11px;
+  min-width: 200px;
+  pointer-events: none;
+  z-index: 1000;
+  border: 1px solid rgba(255, 255, 255, 0.1);
+}
+
+.perf-stats-title {
+  font-weight: bold;
+  font-size: 12px;
+  margin-bottom: 8px;
+  color: #fff;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.2);
+  padding-bottom: 6px;
+}
+
+.perf-stats-section {
+  margin-bottom: 10px;
+}
+
+.perf-stats-section:last-child {
+  margin-bottom: 0;
+}
+
+.perf-stats-section-title {
+  color: #888;
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
+.perf-row {
+  display: flex;
+  justify-content: space-between;
+  padding: 1px 0;
+}
+
+.perf-row-indent {
+  padding-left: 12px;
+}
+
+.perf-row-indent .perf-label {
+  color: #999;
+}
+
+.perf-row-highlight {
+  background: rgba(255, 200, 0, 0.1);
+  margin: 0 -4px;
+  padding: 1px 4px;
+  border-radius: 2px;
+}
+
+.perf-row-highlight .perf-label {
+  color: #ffc800;
+}
+
+.perf-row-total {
+  border-top: 1px solid rgba(255, 255, 255, 0.1);
+  margin-top: 4px;
+  padding-top: 4px;
+  font-weight: bold;
+}
+
+.perf-row-total .perf-value {
+  color: #4fc3f7;
+}
+
+.perf-label {
+  color: #aaa;
+}
+
+.perf-value {
+  color: #fff;
+  font-variant-numeric: tabular-nums;
+}

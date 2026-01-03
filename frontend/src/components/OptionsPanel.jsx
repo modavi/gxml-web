@@ -18,9 +18,14 @@ function OptionsPanel() {
     setVertexScale,
     enableInertia,
     setEnableInertia,
+    showPerfStats,
+    setShowPerfStats,
   } = useViewportStore()
   
   const renderGXML = useAppStore((state) => state.renderGXML)
+  const backendMode = useAppStore((state) => state.backendMode)
+  const setBackendMode = useAppStore((state) => state.setBackendMode)
+  const webGPUAvailable = useAppStore((state) => state.webGPUAvailable)
 
   if (!optionsPanelOpen) return null
 
@@ -96,6 +101,33 @@ function OptionsPanel() {
           LMB: Rotate, RMB/Alt+LMB: Pan, Scroll: Zoom
         </div>
       </OptionSection>
+
+      <OptionSection title="Debug">
+        <Toggle
+          label="Show Performance Stats"
+          checked={showPerfStats}
+          onChange={setShowPerfStats}
+        />
+      </OptionSection>
+
+      <OptionSection title="Backend">
+        <ButtonGroup
+          options={[
+            { value: 'server', label: 'Server' },
+            { value: 'browser', label: 'Browser', disabled: !webGPUAvailable },
+          ]}
+          value={backendMode}
+          onChange={(mode) => {
+            setBackendMode(mode)
+            renderGXML() // Re-render with new backend
+          }}
+        />
+        <div className="option-hint">
+          {webGPUAvailable 
+            ? '✅ WebGPU available - Browser mode uses local GPU'
+            : '⚠️ WebGPU not available - Server mode only'}
+        </div>
+      </OptionSection>
     </div>
   )
 }
@@ -115,8 +147,9 @@ function ButtonGroup({ options, value, onChange }) {
       {options.map((opt) => (
         <button
           key={opt.value}
-          className={`option-btn ${value === opt.value ? 'active' : ''}`}
-          onClick={() => onChange(opt.value)}
+          className={`option-btn ${value === opt.value ? 'active' : ''} ${opt.disabled ? 'disabled' : ''}`}
+          onClick={() => !opt.disabled && onChange(opt.value)}
+          disabled={opt.disabled}
         >
           {opt.label}
         </button>

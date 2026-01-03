@@ -92,6 +92,13 @@
   color: var(--accent-color);
 }
 
+.option-btn.disabled,
+.option-btn:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+  pointer-events: none;
+}
+
 .option-toggle {
   display: flex;
   align-items: center;

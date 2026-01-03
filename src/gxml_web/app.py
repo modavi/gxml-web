@@ -16,6 +16,7 @@ if str(GXML_SRC_PATH) not in sys.path:
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import FileResponse, Response
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Import GXML components (now uses local imports from gxml src)
@@ -28,6 +29,15 @@ from gxml_web.json_render_engine import JSONRenderEngine
 from gxml_web.binary_render_engine import BinaryRenderEngine
 
 app = FastAPI(title="GXML Web Viewer")
+
+# Add CORS middleware for Electron support
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=["*"],  # In production, restrict to specific origins
+    allow_credentials=True,
+    allow_methods=["*"],
+    allow_headers=["*"],
+)
 
 # Get the static files directories
 STATIC_DIR = Path(__file__).parent / "static"
@@ -161,6 +171,12 @@ def parse_complex_type(complex_type, ns, simple_types) -> dict:
     return result
 
 
+@app.get("/health")
+async def health_check():
+    """Health check endpoint for Electron server startup detection."""
+    return {"status": "healthy", "service": "gxml-web"}
+
+
 @app.get("/api/schema")
 async def get_schema():
     """Return the GXML schema parsed from XSD for editor autocomplete."""
@@ -216,10 +232,22 @@ async def render_gxml_binary(request: GXMLRequest) -> Response:
         root_element = GXMLParser.parse(request.xml)
         timings['parse'] = (time.perf_counter() - t_start) * 1000
         
-        # Apply layout
+        # Apply layout with granular timing
         t_start = time.perf_counter()
-        GXMLLayout.layout(root_element)
+        GXMLLayout.measure_pass(root_element)
+        timings['measure'] = (time.perf_counter() - t_start) * 1000
+        
+        t_start = time.perf_counter()
+        GXMLLayout.pre_layout_pass(root_element)
+        timings['prelayout'] = (time.perf_counter() - t_start) * 1000
+        
+        t_start = time.perf_counter()
+        GXMLLayout.layout_pass(root_element)
         timings['layout'] = (time.perf_counter() - t_start) * 1000
+        
+        t_start = time.perf_counter()
+        GXMLLayout.post_layout_pass(root_element)
+        timings['postlayout'] = (time.perf_counter() - t_start) * 1000
         
         # Create binary render engine and render
         t_start = time.perf_counter()
@@ -240,11 +268,13 @@ async def render_gxml_binary(request: GXMLRequest) -> Response:
             headers={
                 "X-Panel-Count": str(len(render_engine.panels)),
                 "X-Timing-Parse": f"{timings['parse']:.2f}",
+                "X-Timing-Measure": f"{timings['measure']:.2f}",
+                "X-Timing-Prelayout": f"{timings['prelayout']:.2f}",
                 "X-Timing-Layout": f"{timings['layout']:.2f}",
+                "X-Timing-Postlayout": f"{timings['postlayout']:.2f}",
                 "X-Timing-Render": f"{timings['render']:.2f}",
                 "X-Timing-Serialize": f"{timings['serialize']:.2f}",
                 "X-Timing-Total": f"{timings['total']:.2f}",
-                "Server-Timing": f"parse;dur={timings['parse']:.2f}, layout;dur={timings['layout']:.2f}, render;dur={timings['render']:.2f}, serialize;dur={timings['serialize']:.2f}, total;dur={timings['total']:.2f}",
             }
         )
     

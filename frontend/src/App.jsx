@@ -18,12 +18,15 @@ const LoadingPanel = () => (
 function App() {
   const loadSchema = useAppStore((state) => state.loadSchema)
   const renderGXML = useAppStore((state) => state.renderGXML)
+  const initBrowserBackend = useAppStore((state) => state.initBrowserBackend)
 
   useEffect(() => {
+    // Initialize browser backend (WebGPU check)
+    initBrowserBackend()
     loadSchema()
     // Initial render on app load
     renderGXML()
-  }, [loadSchema, renderGXML])
+  }, [initBrowserBackend, loadSchema, renderGXML])
 
   return (
     <div className="app-container">

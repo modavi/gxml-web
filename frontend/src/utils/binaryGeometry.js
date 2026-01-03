@@ -21,6 +21,8 @@
  *     Vertices: vertex_count * 3 * float32 (x, y, z packed)
  */
 
+import { buildApiUrl } from './apiConfig';
+
 const MAGIC = 'GXML';
 const SUPPORTED_VERSIONS = [1, 2]; // Support both v1 and v2
 
@@ -172,7 +174,8 @@ export async function fetchBinaryGeometry(xml) {
   const timings = {};
   const t0 = performance.now();
   
-  const response = await fetch('/api/render/binary', {
+  const apiUrl = await buildApiUrl('/api/render/binary');
+  const response = await fetch(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ xml }),
@@ -188,7 +191,10 @@ export async function fetchBinaryGeometry(xml) {
   // Extract server-side timings from headers
   timings.server = {
     parse: parseFloat(response.headers.get('X-Timing-Parse') || '0'),
+    measure: parseFloat(response.headers.get('X-Timing-Measure') || '0'),
+    prelayout: parseFloat(response.headers.get('X-Timing-Prelayout') || '0'),
     layout: parseFloat(response.headers.get('X-Timing-Layout') || '0'),
+    postlayout: parseFloat(response.headers.get('X-Timing-Postlayout') || '0'),
     render: parseFloat(response.headers.get('X-Timing-Render') || '0'),
     serialize: parseFloat(response.headers.get('X-Timing-Serialize') || '0'),
     total: parseFloat(response.headers.get('X-Timing-Total') || '0'),
@@ -207,8 +213,11 @@ export async function fetchBinaryGeometry(xml) {
   // Log timing summary
   console.group('🕐 GXML Render Timings');
   console.log(`📡 Server (Python):`);
-  console.log(`   Parse XML:      ${timings.server.parse.toFixed(2)} ms`);
+  console.log(`   Parse:          ${timings.server.parse.toFixed(2)} ms`);
+  console.log(`   Measure:        ${timings.server.measure.toFixed(2)} ms`);
+  console.log(`   Pre-layout:     ${timings.server.prelayout.toFixed(2)} ms`);
   console.log(`   Layout:         ${timings.server.layout.toFixed(2)} ms`);
+  console.log(`   Post-layout:    ${timings.server.postlayout.toFixed(2)} ms`);
   console.log(`   Render/Solve:   ${timings.server.render.toFixed(2)} ms`);
   console.log(`   Serialize:      ${timings.server.serialize.toFixed(2)} ms`);
   console.log(`   Total Server:   ${timings.server.total.toFixed(2)} ms`);

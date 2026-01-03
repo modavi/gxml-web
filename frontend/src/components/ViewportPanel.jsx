@@ -6,6 +6,7 @@ import OptionsPanel from './OptionsPanel'
 import SelectionModeBar from './SelectionModeBar'
 import SnapToolbar from './SnapToolbar'
 import AxisGizmo from './AxisGizmo'
+import PerfStatsHUD from './PerfStatsHUD'
 import { IconPencil, IconChevronDown } from './ui/Icons'
 import { Settings } from 'lucide-react'
 import './ViewportPanel.css'
@@ -99,6 +100,9 @@ function ViewportPanel() {
         </button>
         
         <OptionsPanel />
+        
+        {/* Performance stats HUD - top right (below options) */}
+        <PerfStatsHUD />
         
         {/* Axis gizmo - bottom left */}
         <AxisGizmo 

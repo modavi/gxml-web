@@ -1332,7 +1332,14 @@ export function useThreeScene(containerRef, geometryData) {
     clearGroup(labelGroup)
     clearGroup(vertexGroup)
     
-    if (!geometryData?.panels?.length) return
+    if (!geometryData?.panels?.length) {
+      // Clear timings when no data
+      useAppStore.getState().setThreeJsTimings(null)
+      return
+    }
+    
+    // Time Three.js mesh creation
+    const t0 = performance.now()
     
     // Create meshes
     geometryData.panels.forEach((panel) => {
@@ -1342,14 +1349,40 @@ export function useThreeScene(containerRef, geometryData) {
       }
     })
     
+    const meshTime = performance.now() - t0
+    
     // Create labels
+    const t1 = performance.now()
     if (showFaceLabels) {
       createLabels(geometryData, labelGroup)
     }
+    const labelTime = performance.now() - t1
     
     // Create vertices (always create for selection, visible only in point mode)
+    const t2 = performance.now()
     const showVerts = selectionMode === 'point'
     createVertexMarkers(geometryData, vertexGroup, showVerts, vertexScale)
+    const vertexTime = performance.now() - t2
+    
+    const totalTime = performance.now() - t0
+    
+    // Store timings in app store for HUD
+    useAppStore.getState().setThreeJsTimings({
+      meshes: meshTime,
+      labels: labelTime,
+      vertices: vertexTime,
+      total: totalTime,
+      panelCount: geometryData.panels.length,
+    })
+    
+    // Log to console
+    console.group('🎨 Three.js Scene Build')
+    console.log(`   Meshes:         ${meshTime.toFixed(2)} ms (${geometryData.panels.length} panels)`)
+    console.log(`   Labels:         ${labelTime.toFixed(2)} ms`)
+    console.log(`   Vertices:       ${vertexTime.toFixed(2)} ms`)
+    console.log(`   Total Three.js: ${totalTime.toFixed(2)} ms`)
+    console.groupEnd()
+    
   }, [geometryData, viewMode, colorMode, showFaceLabels, selectionMode, vertexScale])
 
   // Handle selection highlighting from spreadsheet

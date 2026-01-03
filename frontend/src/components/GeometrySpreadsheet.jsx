@@ -114,15 +114,11 @@ function GeometrySpreadsheet() {
     
     let globalVertIdx = 0
     geometryData.panels.forEach((panel, panelIdx) => {
-      if (!panel.points) return
-      
       const faceId = panel.id || `face_${panelIdx}`
       const pointIndices = []
       
-      panel.points.forEach((p, localIdx) => {
-        const x = p[0]
-        const y = p[1]
-        const z = p[2] || 0
+      // Handle both binary (vertexBuffer) and JSON (points) formats
+      const processVertex = (x, y, z, localIdx) => {
         const pointIdx = getOrCreateVertexIdx(x, y, z)
         pointIndices.push(pointIdx)
         
@@ -142,7 +138,22 @@ function GeometrySpreadsheet() {
           pointIdx,  // Reference to deduplicated point
         })
         globalVertIdx++
-      })
+      }
+      
+      if (panel.vertexBuffer) {
+        // Binary format: read directly from Float32Array
+        const vb = panel.vertexBuffer
+        for (let i = 0, localIdx = 0; i < vb.length; i += 3, localIdx++) {
+          processVertex(vb[i], vb[i + 1], vb[i + 2], localIdx)
+        }
+      } else if (panel.points) {
+        // JSON format: iterate points array
+        panel.points.forEach((p, localIdx) => {
+          processVertex(p[0], p[1], p[2] || 0, localIdx)
+        })
+      } else {
+        return // Skip panels with no geometry data
+      }
       
       faces.push({
         idx: panelIdx,

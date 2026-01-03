@@ -64,6 +64,10 @@ export const useViewportStore = create((set, get) => ({
   enableInertia: false,
   setEnableInertia: (enable) => set({ enableInertia: enable }),
   
+  // Performance stats HUD
+  showPerfStats: false,
+  setShowPerfStats: (show) => set({ showPerfStats: show }),
+  
   // Options panel
   optionsPanelOpen: false,
   setOptionsPanelOpen: (open) => set({ optionsPanelOpen: open }),

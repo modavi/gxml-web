@@ -1,4 +1,8 @@
 import { create } from 'zustand'
+import { fetchBinaryGeometry } from '../utils/binaryGeometry'
+import { buildApiUrl } from '../utils/apiConfig'
+import { getBrowserSolver } from '../utils/browserSolver'
+import { isWebGPUAvailable } from '../utils/webgpuShaders'
 
 const DEFAULT_GXML = `<root>
     <panel thickness="0.25"/>
@@ -302,7 +306,8 @@ export const useAppStore = create((set, get) => ({
   schema: { tags: {} },
   loadSchema: async () => {
     try {
-      const response = await fetch('/api/schema')
+      const apiUrl = await buildApiUrl('/api/schema')
+      const response = await fetch(apiUrl)
       if (response.ok) {
         const schema = await response.json()
         set({ schema })
@@ -317,33 +322,83 @@ export const useAppStore = create((set, get) => ({
   isAutoUpdate: true,
   setAutoUpdate: (value) => set({ isAutoUpdate: value }),
   
+  // Use binary protocol for geometry (faster, smaller payload)
+  useBinaryProtocol: true,
+  setUseBinaryProtocol: (value) => set({ useBinaryProtocol: value }),
+  
+  // Backend mode: 'server' (Python), 'browser' (WebGPU/JS), 'auto' (browser if available)
+  backendMode: 'server',
+  setBackendMode: (mode) => set({ backendMode: mode }),
+  
+  // WebGPU availability (set on init)
+  webGPUAvailable: false,
+  setWebGPUAvailable: (value) => set({ webGPUAvailable: value }),
+  
+  // Initialize browser solver on startup
+  initBrowserBackend: async () => {
+    const available = isWebGPUAvailable()
+    set({ webGPUAvailable: available })
+    if (available) {
+      try {
+        await getBrowserSolver()
+        console.log('✅ Browser GXML solver ready (WebGPU available)')
+      } catch (e) {
+        console.warn('Browser solver init failed:', e)
+        set({ webGPUAvailable: false })
+      }
+    } else {
+      console.log('ℹ️ WebGPU not available, using server backend')
+    }
+  },
+  
   geometryData: null,
   setGeometryData: (data) => set({ geometryData: data }),
+  
+  // Three.js scene build timings (set by useThreeScene)
+  threeJsTimings: null,
+  setThreeJsTimings: (timings) => set({ threeJsTimings: timings }),
   
   error: null,
   setError: (error) => set({ error }),
   
   // Render action
   renderGXML: async () => {
-    const { xmlContent, setGeometryData, setError } = get()
+    const { xmlContent, setGeometryData, setError, useBinaryProtocol, backendMode, webGPUAvailable } = get()
     setError(null)
     
+    // Determine if we should use browser backend
+    const useBrowser = backendMode === 'browser' || 
+                       (backendMode === 'auto' && webGPUAvailable)
+    
     try {
-      const response = await fetch('/api/render', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ xml: xmlContent }),
-      })
-      
-      const result = await response.json()
-      
-      if (result.success) {
-        setGeometryData(result.data)
+      if (useBrowser) {
+        // Browser-based solver (WebGPU accelerated)
+        const solver = await getBrowserSolver()
+        const data = await solver.solve(xmlContent)
+        setGeometryData(data)
+      } else if (useBinaryProtocol) {
+        // Binary protocol: smaller payload, faster parsing
+        const data = await fetchBinaryGeometry(xmlContent)
+        setGeometryData(data)
       } else {
-        setError(result.error || 'Unknown error occurred')
+        // JSON protocol: original format
+        const apiUrl = await buildApiUrl('/api/render')
+        const response = await fetch(apiUrl, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ xml: xmlContent }),
+        })
+        
+        const result = await response.json()
+        
+        if (result.success) {
+          setGeometryData(result.data)
+        } else {
+          setError(result.error || 'Unknown error occurred')
+        }
       }
     } catch (error) {
-      setError(`Network error: ${error.message}`)
+      setError(`Render error: ${error.message}`)
     }
   },
 }))
