@@ -2,6 +2,7 @@
 
 import json
 import sys
+import time
 import xml.etree.ElementTree as ET
 from pathlib import Path
 from typing import Any
@@ -14,7 +15,7 @@ if str(GXML_SRC_PATH) not in sys.path:
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import FileResponse
+from fastapi.responses import FileResponse, Response
 from pydantic import BaseModel
 
 # Import GXML components (now uses local imports from gxml src)
@@ -22,8 +23,9 @@ from gxml_parser import GXMLParser
 from gxml_layout import GXMLLayout
 from gxml_render import GXMLRender
 
-# Import our JSON render engine
+# Import our render engines
 from gxml_web.json_render_engine import JSONRenderEngine
+from gxml_web.binary_render_engine import BinaryRenderEngine
 
 app = FastAPI(title="GXML Web Viewer")
 
@@ -196,6 +198,62 @@ async def render_gxml(request: GXMLRequest) -> GXMLResponse:
             # Clean up XML parse errors
             error_msg = f"XML Parse Error: {error_msg}"
         return GXMLResponse(success=False, error=error_msg)
+
+
+@app.post("/api/render/binary")
+async def render_gxml_binary(request: GXMLRequest) -> Response:
+    """Render GXML and return geometry as packed binary data.
+    
+    Returns binary data that can be loaded directly into WebGL Float32Arrays.
+    See binary_render_engine.py for format documentation.
+    """
+    try:
+        timings = {}
+        t0 = time.perf_counter()
+        
+        # Parse the GXML
+        t_start = time.perf_counter()
+        root_element = GXMLParser.parse(request.xml)
+        timings['parse'] = (time.perf_counter() - t_start) * 1000
+        
+        # Apply layout
+        t_start = time.perf_counter()
+        GXMLLayout.layout(root_element)
+        timings['layout'] = (time.perf_counter() - t_start) * 1000
+        
+        # Create binary render engine and render
+        t_start = time.perf_counter()
+        render_engine = BinaryRenderEngine()
+        GXMLRender.render(root_element, render_engine)
+        timings['render'] = (time.perf_counter() - t_start) * 1000
+        
+        # Get binary data
+        t_start = time.perf_counter()
+        binary_data = render_engine.to_bytes()
+        timings['serialize'] = (time.perf_counter() - t_start) * 1000
+        
+        timings['total'] = (time.perf_counter() - t0) * 1000
+        
+        return Response(
+            content=binary_data,
+            media_type="application/octet-stream",
+            headers={
+                "X-Panel-Count": str(len(render_engine.panels)),
+                "X-Timing-Parse": f"{timings['parse']:.2f}",
+                "X-Timing-Layout": f"{timings['layout']:.2f}",
+                "X-Timing-Render": f"{timings['render']:.2f}",
+                "X-Timing-Serialize": f"{timings['serialize']:.2f}",
+                "X-Timing-Total": f"{timings['total']:.2f}",
+                "Server-Timing": f"parse;dur={timings['parse']:.2f}, layout;dur={timings['layout']:.2f}, render;dur={timings['render']:.2f}, serialize;dur={timings['serialize']:.2f}, total;dur={timings['total']:.2f}",
+            }
+        )
+    
+    except Exception as e:
+        # Return error as JSON even for binary endpoint
+        error_msg = str(e)
+        if 'ParseError' in type(e).__name__ or 'xml.etree' in str(type(e)):
+            error_msg = f"XML Parse Error: {error_msg}"
+        raise HTTPException(status_code=400, detail=error_msg)
 
 
 @app.get("/")
