@@ -10,6 +10,8 @@ function PerfStatsHUD() {
   const showPerfStats = useViewportStore((state) => state.showPerfStats)
   const geometryData = useAppStore((state) => state.geometryData)
   const threeJsTimings = useAppStore((state) => state.threeJsTimings)
+  const trueEndToEnd = useAppStore((state) => state.trueEndToEnd)
+  const userActionEndToEnd = useAppStore((state) => state.userActionEndToEnd)
   
   if (!showPerfStats) return null
   
@@ -19,6 +21,12 @@ function PerfStatsHUD() {
   // Calculate layout total
   const layoutTotal = (server.measure || 0) + (server.prelayout || 0) + 
                       (server.layout || 0) + (server.postlayout || 0)
+  
+  // Check if we have solver breakdown data
+  const hasSolverBreakdown = (server.intersection > 0 || server.face > 0 || server.geometry > 0)
+  
+  // Electron uses ipcCall instead of networkFetch
+  const networkTime = timings?.networkFetch || timings?.ipcCall || 0
   
   return (
     <div className="perf-stats-hud">
@@ -33,13 +41,20 @@ function PerfStatsHUD() {
         <PerfRow label="Post-layout" value={server.postlayout} indent />
         <PerfRow label="Layout Total" value={layoutTotal} highlight />
         <PerfRow label="Render/Solve" value={server.render} />
+        {hasSolverBreakdown && (
+          <>
+            <PerfRow label="Intersection" value={server.intersection} indent nested />
+            <PerfRow label="Face Solver" value={server.face} indent nested />
+            <PerfRow label="Geometry" value={server.geometry} indent nested />
+          </>
+        )}
         <PerfRow label="Serialize" value={server.serialize} />
         <PerfRow label="Server Total" value={server.total} total />
       </div>
       
       <div className="perf-stats-section">
         <div className="perf-stats-section-title">Network</div>
-        <PerfRow label="Fetch" value={timings?.networkFetch} />
+        <PerfRow label={timings?.ipcCall ? "IPC Call" : "Fetch"} value={networkTime} />
         <PerfRow label="ArrayBuffer" value={timings?.arrayBufferRead} />
         <PerfRow label="Binary Parse" value={timings?.binaryParse} />
       </div>
@@ -55,20 +70,20 @@ function PerfStatsHUD() {
       <div className="perf-stats-section">
         <div className="perf-stats-section-title">Summary</div>
         <PerfRow label="Panels" value={geometryData?.panels?.length} isCount />
-        <PerfRow label="End-to-End" value={
-          (timings?.networkFetch || 0) + (threeJsTimings?.total || 0)
-        } total />
+        <PerfRow label="End-to-End" value={trueEndToEnd} total />
+        <PerfRow label="User Action" value={userActionEndToEnd} total highlight />
       </div>
     </div>
   )
 }
 
-function PerfRow({ label, value, indent, highlight, total, isCount }) {
+function PerfRow({ label, value, indent, highlight, total, isCount, nested }) {
   if (value === undefined || value === null) return null
   
   const className = [
     'perf-row',
     indent && 'perf-row-indent',
+    nested && 'perf-row-nested',
     highlight && 'perf-row-highlight',
     total && 'perf-row-total',
   ].filter(Boolean).join(' ')

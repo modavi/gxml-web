@@ -3,6 +3,7 @@ import { fetchBinaryGeometry } from '../utils/binaryGeometry'
 import { buildApiUrl } from '../utils/apiConfig'
 import { getBrowserSolver } from '../utils/browserSolver'
 import { isWebGPUAvailable } from '../utils/webgpuShaders'
+import { updateScene } from '../utils/sceneRegistry'
 
 const DEFAULT_GXML = `<root>
     <panel thickness="0.25"/>
@@ -147,6 +148,8 @@ export const useAppStore = create((set, get) => ({
   // Returns: Promise that resolves with the new panel index when rendering is complete
   addPanelFromPoints: async (startPoint, endPoint, afterPanelIndex = null, thickness = 0.25, parentRotation = 0, snapInfo = null, attachInfo = null) => {
     const { xmlContent, setXmlContent, renderGXML, isAutoUpdate } = get()
+    const userStart = get().userActionStartTime
+    if (userStart) console.log(`[TIMER] addPanelFromPoints entered at: ${(performance.now() - userStart).toFixed(2)}ms`)
     
     // Calculate panel properties from two points in XZ plane
     const dx = endPoint.x - startPoint.x
@@ -191,10 +194,16 @@ export const useAppStore = create((set, get) => ({
       if (closingTagMatch) {
         const insertPos = xmlContent.lastIndexOf('</root>')
         const newContent = xmlContent.substring(0, insertPos) + '    ' + panelXml + '\n' + xmlContent.substring(insertPos)
+        
+        const userStart = get().userActionStartTime
+        if (userStart) console.log(`[TIMER] Before setXmlContent at: ${(performance.now() - userStart).toFixed(2)}ms`)
         setXmlContent(newContent)
+        if (userStart) console.log(`[TIMER] After setXmlContent at: ${(performance.now() - userStart).toFixed(2)}ms`)
         
         if (isAutoUpdate) {
+          if (userStart) console.log(`[TIMER] Before renderGXML at: ${(performance.now() - userStart).toFixed(2)}ms`)
           await renderGXML()
+          if (userStart) console.log(`[TIMER] After renderGXML (awaited) at: ${(performance.now() - userStart).toFixed(2)}ms`)
         }
         // Count existing panels to determine index
         const panelCount = (xmlContent.match(/<panel\b/gi) || []).length
@@ -322,13 +331,18 @@ export const useAppStore = create((set, get) => ({
   isAutoUpdate: true,
   setAutoUpdate: (value) => set({ isAutoUpdate: value }),
   
-  // Use binary protocol for geometry (faster, smaller payload)
-  useBinaryProtocol: true,
-  setUseBinaryProtocol: (value) => set({ useBinaryProtocol: value }),
-  
   // Backend mode: 'server' (Python), 'browser' (WebGPU/JS), 'auto' (browser if available)
+  // In Electron: 'cpu', 'c', 'gpu' for Python solver backend selection
   backendMode: 'server',
   setBackendMode: (mode) => set({ backendMode: mode }),
+  
+  // Python solver backend (Electron only): 'cpu', 'c', 'gpu'
+  pythonBackend: 'cpu',
+  setPythonBackend: (backend) => set({ pythonBackend: backend }),
+  
+  // Available Python backends (set by Electron on init)
+  availablePythonBackends: { cpu: true, c: false, gpu: false },
+  setAvailablePythonBackends: (backends) => set({ availablePythonBackends: backends }),
   
   // WebGPU availability (set on init)
   webGPUAvailable: false,
@@ -336,8 +350,24 @@ export const useAppStore = create((set, get) => ({
   
   // Initialize browser solver on startup
   initBrowserBackend: async () => {
-    const available = isWebGPUAvailable()
-    set({ webGPUAvailable: available })
+    // Check for Electron and get Python backend info
+    if (window.electronAPI?.isElectron) {
+      try {
+        const info = await window.electronAPI.getBackendInfo();
+        set({ 
+          availablePythonBackends: info.availableBackends,
+          pythonBackend: info.currentBackend,
+          backendMode: 'electron'  // Special mode for Electron
+        });
+        console.log('✅ Electron Python backend info:', info);
+      } catch (e) {
+        console.warn('Failed to get Electron backend info:', e);
+      }
+    }
+    
+    // Also check WebGPU for browser mode
+    const available = isWebGPUAvailable();
+    set({ webGPUAvailable: available });
     if (available) {
       try {
         await getBrowserSolver()
@@ -352,19 +382,45 @@ export const useAppStore = create((set, get) => ({
   },
   
   geometryData: null,
-  setGeometryData: (data) => set({ geometryData: data }),
+  setGeometryData: (data) => {
+    // Update scene DIRECTLY, bypassing React scheduling
+    // This eliminates ~600ms of React overhead for large scenes
+    const delivered = updateScene(data)
+    if (delivered) {
+      console.log('[TIMER] Geometry delivered directly to Three.js (bypassing React)')
+    }
+    // Also update state for other consumers (spreadsheet, etc.)
+    set({ geometryData: data })
+  },
   
   // Three.js scene build timings (set by useThreeScene)
   threeJsTimings: null,
   setThreeJsTimings: (timings) => set({ threeJsTimings: timings }),
+  
+  // True end-to-end timing: starts at renderGXML, ends when Three.js scene is built
+  renderStartTime: null,
+  setRenderStartTime: (time) => set({ renderStartTime: time }),
+  trueEndToEnd: null,
+  setTrueEndToEnd: (time) => set({ trueEndToEnd: time }),
+  
+  // User action start time - set this when user initiates an action (click, keypress, etc.)
+  userActionStartTime: null,
+  setUserActionStartTime: (time) => set({ userActionStartTime: time }),
+  userActionEndToEnd: null,
+  setUserActionEndToEnd: (time) => set({ userActionEndToEnd: time }),
   
   error: null,
   setError: (error) => set({ error }),
   
   // Render action
   renderGXML: async () => {
-    const { xmlContent, setGeometryData, setError, useBinaryProtocol, backendMode, webGPUAvailable } = get()
+    const { xmlContent, setGeometryData, setError, backendMode, webGPUAvailable, setRenderStartTime } = get()
     setError(null)
+    
+    // Start true end-to-end timer
+    const renderStart = performance.now()
+    setRenderStartTime(renderStart)
+    console.log(`[TIMER] renderGXML started at: ${renderStart.toFixed(2)}`)
     
     // Determine if we should use browser backend
     const useBrowser = backendMode === 'browser' || 
@@ -375,27 +431,13 @@ export const useAppStore = create((set, get) => ({
         // Browser-based solver (WebGPU accelerated)
         const solver = await getBrowserSolver()
         const data = await solver.solve(xmlContent)
-        setGeometryData(data)
-      } else if (useBinaryProtocol) {
-        // Binary protocol: smaller payload, faster parsing
-        const data = await fetchBinaryGeometry(xmlContent)
+        console.log(`[TIMER] setGeometryData (browser) at: ${(performance.now() - renderStart).toFixed(2)}ms from renderStart`)
         setGeometryData(data)
       } else {
-        // JSON protocol: original format
-        const apiUrl = await buildApiUrl('/api/render')
-        const response = await fetch(apiUrl, {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ xml: xmlContent }),
-        })
-        
-        const result = await response.json()
-        
-        if (result.success) {
-          setGeometryData(result.data)
-        } else {
-          setError(result.error || 'Unknown error occurred')
-        }
+        // Server binary protocol
+        const data = await fetchBinaryGeometry(xmlContent)
+        console.log(`[TIMER] setGeometryData (binary) at: ${(performance.now() - renderStart).toFixed(2)}ms from renderStart`)
+        setGeometryData(data)
       }
     } catch (error) {
       setError(`Render error: ${error.message}`)

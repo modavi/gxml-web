@@ -24,26 +24,139 @@
 import { buildApiUrl } from './apiConfig';
 
 const MAGIC = 'GXML';
+const MAGIC_FAST = 'GXMF';
 const SUPPORTED_VERSIONS = [1, 2]; // Support both v1 and v2
 
 /**
  * Parse binary geometry data from ArrayBuffer
+ * Auto-detects format based on magic bytes (GXML = per-panel, GXMF = indexed fast)
  * @param {ArrayBuffer} buffer - Raw binary data from API
- * @returns {Object} Parsed geometry data with panels array
+ * @returns {Object} Parsed geometry data with panels array or indexed geometry
  */
 export function parseBinaryGeometry(buffer) {
   const view = new DataView(buffer);
-  let offset = 0;
   
-  // Read header
+  // Read magic to detect format
   const magic = String.fromCharCode(
     view.getUint8(0), view.getUint8(1), view.getUint8(2), view.getUint8(3)
   );
+  
+  if (magic === MAGIC_FAST) {
+    return parseFastBinaryGeometry(buffer, view);
+  } else if (magic === MAGIC) {
+    return parsePerPanelBinaryGeometry(buffer, view);
+  } else {
+    throw new Error(`Invalid magic bytes: expected ${MAGIC} or ${MAGIC_FAST}, got ${magic}`);
+  }
+}
+
+/**
+ * Parse fast indexed binary geometry (GXMF format)
+ * @param {ArrayBuffer} buffer - Raw binary data
+ * @param {DataView} view - DataView of buffer
+ * @returns {Object} Indexed geometry data
+ */
+function parseFastBinaryGeometry(buffer, view) {
+  let offset = 4; // Skip magic
+  
+  const version = view.getUint32(offset, true);
   offset += 4;
   
-  if (magic !== MAGIC) {
-    throw new Error(`Invalid magic bytes: expected ${MAGIC}, got ${magic}`);
+  if (version !== 1) {
+    throw new Error(`Unsupported fast binary version: ${version}`);
   }
+  
+  const vertexCount = view.getUint32(offset, true);
+  offset += 4;
+  
+  const indexCount = view.getUint32(offset, true);
+  offset += 4;
+  
+  const quadCount = view.getUint32(offset, true);
+  offset += 4;
+  
+  // Read vertices (float32 * 3 per vertex)
+  const vertices = new Float32Array(buffer, offset, vertexCount * 3);
+  offset += vertexCount * 3 * 4;
+  
+  // Read indices (uint32)
+  const indices = new Uint32Array(buffer, offset, indexCount);
+  offset += indexCount * 4;
+  
+  // Read panel IDs for each quad
+  const panelIds = [];
+  for (let i = 0; i < quadCount; i++) {
+    const idLength = view.getUint16(offset, true);
+    offset += 2;
+    
+    const idBytes = new Uint8Array(buffer, offset, idLength);
+    panelIds.push(new TextDecoder().decode(idBytes));
+    offset += idLength;
+    
+    // Skip padding to 4-byte alignment
+    const padding = (4 - ((2 + idLength) % 4)) % 4;
+    offset += padding;
+  }
+  
+  // Generate panel colors from IDs (simple hash-based coloring)
+  const panelColors = generatePanelColors(panelIds);
+  
+  return {
+    format: 'indexed',
+    vertices,
+    indices,
+    panelIds,
+    panelColors,
+    quadCount,
+    _meta: {
+      format: 'fast-binary',
+      version,
+      vertexCount,
+      indexCount,
+      quadCount,
+    }
+  };
+}
+
+/**
+ * Generate consistent colors for panel IDs
+ * @param {string[]} panelIds - Array of panel IDs
+ * @returns {Map<string, number[]>} Map of panel ID to [r, g, b]
+ */
+function generatePanelColors(panelIds) {
+  const palette = [
+    [0.914, 0.271, 0.376], // #e94560
+    [0.059, 0.204, 0.376], // #0f3460
+    [0.086, 0.129, 0.243], // #16213e
+    [0.325, 0.204, 0.514], // #533483
+    [0.102, 0.102, 0.180], // #1a1a2e
+    [0.290, 0.306, 0.412], // #4a4e69
+    [0.604, 0.549, 0.596], // #9a8c98
+    [0.788, 0.678, 0.655], // #c9ada7
+    [0.133, 0.133, 0.231], // #22223b
+    [0.949, 0.914, 0.894], // #f2e9e4
+    [0.263, 0.380, 0.933], // #4361ee
+    [0.447, 0.035, 0.718], // #7209b7
+  ];
+  
+  const colorMap = new Map();
+  const uniqueIds = [...new Set(panelIds)];
+  
+  uniqueIds.forEach((id, i) => {
+    colorMap.set(id, palette[i % palette.length]);
+  });
+  
+  return colorMap;
+}
+
+/**
+ * Parse per-panel binary geometry (original GXML format)
+ * @param {ArrayBuffer} buffer - Raw binary data
+ * @param {DataView} view - DataView of buffer
+ * @returns {Object} Parsed geometry data with panels array
+ */
+function parsePerPanelBinaryGeometry(buffer, view) {
+  let offset = 4; // Skip magic already read
   
   const version = view.getUint32(offset, true); // little-endian
   offset += 4;
@@ -166,15 +279,104 @@ export function parseBinaryGeometry(buffer) {
 }
 
 /**
+ * Check if running in Electron with direct Python support
+ */
+function hasElectronAPI() {
+  return typeof window !== 'undefined' && 
+         window.electronAPI && 
+         typeof window.electronAPI.processGxml === 'function';
+}
+
+/**
+ * Process GXML via Electron IPC (direct Python call, no server)
+ * @param {string} xml - GXML content
+ * @returns {Promise<Object>} Parsed geometry data with timing info
+ */
+async function processGxmlViaElectron(xml) {
+  const timings = {};
+  const t0 = performance.now();
+  
+  const result = await window.electronAPI.processGxml(xml);
+  timings.ipcCall = performance.now() - t0;
+  
+  if (!result.success) {
+    throw new Error(result.error || 'GXML processing failed');
+  }
+  
+  timings.pythonDuration = result.duration;
+  
+  // Store server-side timing breakdown (from Python)
+  if (result.serverTimings) {
+    timings.server = result.serverTimings;
+  }
+  
+  const t1 = performance.now();
+  // Get ArrayBuffer from Uint8Array - use the underlying buffer directly when possible
+  // to avoid extra copy
+  let buffer;
+  if (result.buffer instanceof Uint8Array) {
+    // If the Uint8Array covers the whole ArrayBuffer, use it directly
+    if (result.buffer.byteOffset === 0 && result.buffer.byteLength === result.buffer.buffer.byteLength) {
+      buffer = result.buffer.buffer;
+    } else {
+      // Otherwise we need to slice
+      buffer = result.buffer.buffer.slice(
+        result.buffer.byteOffset,
+        result.buffer.byteOffset + result.buffer.byteLength
+      );
+    }
+  } else if (result.buffer instanceof ArrayBuffer) {
+    buffer = result.buffer;
+  } else {
+    throw new Error('Unexpected buffer format from Electron');
+  }
+  const data = parseBinaryGeometry(buffer);
+  timings.binaryParse = performance.now() - t1;
+  
+  timings.totalFrontend = performance.now() - t0;
+  
+  // Log timing summary
+  console.group('🕐 GXML Render Timings (Electron Direct)');
+  if (timings.server) {
+    console.log(`📝 Parse:     ${timings.server.parse?.toFixed(2)} ms`);
+    console.log(`📐 Measure:   ${timings.server.measure?.toFixed(2)} ms`);
+    console.log(`📐 Prelayout: ${timings.server.prelayout?.toFixed(2)} ms`);
+    console.log(`📐 Layout:    ${timings.server.layout?.toFixed(2)} ms`);
+    console.log(`📐 Postlayout:${timings.server.postlayout?.toFixed(2)} ms`);
+    if (timings.server.intersection > 0 || timings.server.face > 0 || timings.server.geometry > 0) {
+      console.log(`     ├─ Intersection: ${timings.server.intersection?.toFixed(2)} ms`);
+      console.log(`     ├─ Face Solver:  ${timings.server.face?.toFixed(2)} ms`);
+      console.log(`     └─ Geometry:     ${timings.server.geometry?.toFixed(2)} ms`);
+    }
+    console.log(`🔧 Render:    ${timings.server.render?.toFixed(2)} ms`);
+    console.log(`🐍 Total:     ${timings.server.total?.toFixed(2)} ms`);
+  }
+  console.log(`📡 IPC call total:    ${timings.ipcCall.toFixed(2)} ms`);
+  console.log(`📦 Binary parse:      ${timings.binaryParse.toFixed(2)} ms`);
+  console.log(`⏱️  Total:            ${timings.totalFrontend.toFixed(2)} ms`);
+  console.log(`📊 Panels: ${data.panels.length}, Payload: ${(result.byteLength / 1024).toFixed(1)} KB`);
+  console.groupEnd();
+  
+  data.timings = timings;
+  return data;
+}
+
+/**
  * Fetch and parse binary geometry from API
  * @param {string} xml - GXML content
  * @returns {Promise<Object>} Parsed geometry data with timing info
  */
 export async function fetchBinaryGeometry(xml) {
+  // Use Electron IPC if available (much faster, no HTTP overhead)
+  if (hasElectronAPI()) {
+    return processGxmlViaElectron(xml);
+  }
+  
+  // Fall back to HTTP API for web browser
   const timings = {};
   const t0 = performance.now();
   
-  const apiUrl = await buildApiUrl('/api/render/binary');
+  const apiUrl = await buildApiUrl('/api/render');
   const response = await fetch(apiUrl, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
@@ -196,6 +398,10 @@ export async function fetchBinaryGeometry(xml) {
     layout: parseFloat(response.headers.get('X-Timing-Layout') || '0'),
     postlayout: parseFloat(response.headers.get('X-Timing-Postlayout') || '0'),
     render: parseFloat(response.headers.get('X-Timing-Render') || '0'),
+    // Solver breakdown (nested within post-layout)
+    intersection: parseFloat(response.headers.get('X-Timing-Intersection') || '0'),
+    face: parseFloat(response.headers.get('X-Timing-Face') || '0'),
+    geometry: parseFloat(response.headers.get('X-Timing-Geometry') || '0'),
     serialize: parseFloat(response.headers.get('X-Timing-Serialize') || '0'),
     total: parseFloat(response.headers.get('X-Timing-Total') || '0'),
   };
@@ -218,6 +424,11 @@ export async function fetchBinaryGeometry(xml) {
   console.log(`   Pre-layout:     ${timings.server.prelayout.toFixed(2)} ms`);
   console.log(`   Layout:         ${timings.server.layout.toFixed(2)} ms`);
   console.log(`   Post-layout:    ${timings.server.postlayout.toFixed(2)} ms`);
+  if (timings.server.intersection > 0 || timings.server.face > 0 || timings.server.geometry > 0) {
+    console.log(`     ├─ Intersection: ${timings.server.intersection.toFixed(2)} ms`);
+    console.log(`     ├─ Face Solver:  ${timings.server.face.toFixed(2)} ms`);
+    console.log(`     └─ Geometry:     ${timings.server.geometry.toFixed(2)} ms`);
+  }
   console.log(`   Render/Solve:   ${timings.server.render.toFixed(2)} ms`);
   console.log(`   Serialize:      ${timings.server.serialize.toFixed(2)} ms`);
   console.log(`   Total Server:   ${timings.server.total.toFixed(2)} ms`);

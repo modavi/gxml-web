@@ -26,6 +26,13 @@ function OptionsPanel() {
   const backendMode = useAppStore((state) => state.backendMode)
   const setBackendMode = useAppStore((state) => state.setBackendMode)
   const webGPUAvailable = useAppStore((state) => state.webGPUAvailable)
+  
+  // Electron-specific backend options
+  const pythonBackend = useAppStore((state) => state.pythonBackend)
+  const setPythonBackend = useAppStore((state) => state.setPythonBackend)
+  const availablePythonBackends = useAppStore((state) => state.availablePythonBackends)
+  
+  const isElectron = window.electronAPI?.isElectron
 
   if (!optionsPanelOpen) return null
 
@@ -111,22 +118,58 @@ function OptionsPanel() {
       </OptionSection>
 
       <OptionSection title="Backend">
-        <ButtonGroup
-          options={[
-            { value: 'server', label: 'Server' },
-            { value: 'browser', label: 'Browser', disabled: !webGPUAvailable },
-          ]}
-          value={backendMode}
-          onChange={(mode) => {
-            setBackendMode(mode)
-            renderGXML() // Re-render with new backend
-          }}
-        />
-        <div className="option-hint">
-          {webGPUAvailable 
-            ? '✅ WebGPU available - Browser mode uses local GPU'
-            : '⚠️ WebGPU not available - Server mode only'}
-        </div>
+        {isElectron ? (
+          // Electron mode: Show Python backend options
+          <>
+            <ButtonGroup
+              options={[
+                { value: 'cpu', label: 'Python', disabled: false },
+                { value: 'c', label: 'C Extension', disabled: !availablePythonBackends.c },
+                { value: 'gpu', label: 'GPU', disabled: !availablePythonBackends.gpu },
+              ]}
+              value={pythonBackend}
+              onChange={async (backend) => {
+                try {
+                  const result = await window.electronAPI.setBackend(backend)
+                  if (result.success) {
+                    setPythonBackend(result.backend)
+                    renderGXML() // Re-render with new backend
+                  } else {
+                    console.error('Failed to set backend:', result.error)
+                  }
+                } catch (e) {
+                  console.error('Error setting backend:', e)
+                }
+              }}
+            />
+            <div className="option-hint">
+              {availablePythonBackends.c 
+                ? '✅ C extension available (~3.5x faster)' 
+                : '⚠️ C extension not available'}
+              {availablePythonBackends.gpu && ' • GPU acceleration ready'}
+            </div>
+          </>
+        ) : (
+          // Browser mode: Show server/browser options
+          <>
+            <ButtonGroup
+              options={[
+                { value: 'server', label: 'Server' },
+                { value: 'browser', label: 'Browser', disabled: !webGPUAvailable },
+              ]}
+              value={backendMode}
+              onChange={(mode) => {
+                setBackendMode(mode)
+                renderGXML() // Re-render with new backend
+              }}
+            />
+            <div className="option-hint">
+              {webGPUAvailable 
+                ? '✅ WebGPU available - Browser mode uses local GPU'
+                : '⚠️ WebGPU not available - Server mode only'}
+            </div>
+          </>
+        )}
       </OptionSection>
     </div>
   )

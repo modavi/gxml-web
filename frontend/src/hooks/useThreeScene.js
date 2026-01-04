@@ -11,6 +11,7 @@ import { LineSegmentsGeometry } from 'three/examples/jsm/lines/LineSegmentsGeome
 import { LineSegments2 } from 'three/examples/jsm/lines/LineSegments2'
 import { useViewportStore } from '../stores/viewportStore'
 import { useAppStore } from '../stores/appStore'
+import { registerSceneUpdate, unregisterSceneUpdate, getCurrentGeometryData } from '../utils/sceneRegistry'
 
 // Import modular utilities from ./three/
 import {
@@ -19,6 +20,7 @@ import {
   COLORS,
   clearGroup,
   createPolygonMesh,
+  createBatchedMeshes,
   createLabels,
   createVertexMarkers,
   applySelectionHighlight,
@@ -52,7 +54,7 @@ import {
 // 6. Exported Methods
 // ============================================
 
-export function useThreeScene(containerRef, geometryData) {
+export function useThreeScene(containerRef) {
   // ============================================
   // Refs
   // ============================================
@@ -70,9 +72,13 @@ export function useThreeScene(containerRef, geometryData) {
   const mouseRef = useRef(new THREE.Vector2())
   const hoveredMeshRef = useRef(null)
   const hoveredVertexRef = useRef(null)
+  const hoveredFaceInfoRef = useRef(null)  // For batched mode: {panelId, faceId, color}
   const settingsRef = useRef({ showFaceLabels: false, hideOccludedLabels: true })
   const selectionRef = useRef({ selectedFaceId: null, selectedVertexIdx: null, selectedElementId: null })
   const hoverRef = useRef({ hoveredFaceId: null, hoveredVertexIdx: null, hoveredElementId: null })
+  
+  // Ref to store current geometry data (bypasses React state)
+  const geometryDataRef = useRef(null)
   
   // Creation mode refs
   const previewBrushRef = useRef(null)  // PreviewBrush instance
@@ -887,6 +893,11 @@ export function useThreeScene(containerRef, geometryData) {
         const dist = Math.sqrt(dx * dx + dz * dz)
         
         if (dist >= 0.05) {
+          // Start user action timer - this is when user clicked
+          const actionStart = performance.now()
+          useAppStore.getState().setUserActionStartTime(actionStart)
+          console.log(`[TIMER] User action started at: ${actionStart.toFixed(2)}`)
+          
           // Lock the preview in place and show spinner
           previewBrushRef.current?.setPending(true)
           
@@ -951,21 +962,37 @@ export function useThreeScene(containerRef, geometryData) {
       }
       
       // Face selection mode - select individual face
-      if (currentSelectionMode === 'face' && hoveredMeshRef.current) {
-        const faceId = hoveredMeshRef.current.userData.faceId
-        if (faceId) {
-          viewportStore.setSelectedFace(faceId)
+      if (currentSelectionMode === 'face') {
+        // Check batched mode first
+        if (hoveredFaceInfoRef.current) {
+          viewportStore.setSelectedFace(hoveredFaceInfoRef.current.faceId)
+          return
         }
-        return
+        // Then check individual mesh mode
+        if (hoveredMeshRef.current) {
+          const faceId = hoveredMeshRef.current.userData.faceId
+          if (faceId) {
+            viewportStore.setSelectedFace(faceId)
+          }
+          return
+        }
       }
       
       // Element selection mode - select entire panel/element
-      if (currentSelectionMode === 'element' && hoveredMeshRef.current) {
-        const panelId = hoveredMeshRef.current.userData.panelId
-        if (panelId !== undefined && panelId !== null) {
-          viewportStore.setSelectedElement(panelId)
+      if (currentSelectionMode === 'element') {
+        // Check batched mode first
+        if (hoveredFaceInfoRef.current) {
+          viewportStore.setSelectedElement(hoveredFaceInfoRef.current.panelId)
+          return
         }
-        return
+        // Then check individual mesh mode
+        if (hoveredMeshRef.current) {
+          const panelId = hoveredMeshRef.current.userData.panelId
+          if (panelId !== undefined && panelId !== null) {
+            viewportStore.setSelectedElement(panelId)
+          }
+          return
+        }
       }
       
       // Click on nothing - clear selection
@@ -1046,6 +1073,9 @@ export function useThreeScene(containerRef, geometryData) {
 
     // Cleanup
     return () => {
+      // Unregister scene update when unmounting
+      unregisterSceneUpdate()
+      
       resizeObserver.disconnect()
       window.removeEventListener('resize', handleResize)
       window.removeEventListener('keydown', handleKeyDown)
@@ -1135,18 +1165,41 @@ export function useThreeScene(containerRef, geometryData) {
       hoveredVertexRef.current = newHoveredVertex
     }
     
-    // Check meshes
-    const meshes = []
-    geometryGroup.traverse((child) => {
-      if (child.isMesh && child.userData.isFill) {
-        meshes.push(child)
-      }
-    })
+    // Check meshes - handle both batched and individual modes
+    let meshes = []
+    let isBatched = geometryGroup.userData.isBatched
+    
+    if (isBatched) {
+      // In batched mode, just raycast against the batched fill mesh
+      geometryGroup.traverse((child) => {
+        if (child.isMesh && child.userData.isBatchedFill) {
+          meshes.push(child)
+        }
+      })
+    } else {
+      // In individual mode, raycast against all fill meshes
+      geometryGroup.traverse((child) => {
+        if (child.isMesh && child.userData.isFill) {
+          meshes.push(child)
+        }
+      })
+    }
     
     const intersects = raycaster.intersectObjects(meshes, false)
     let newHovered = null
+    let hoveredFaceInfo = null
+    
     if (intersects.length > 0 && !newHoveredVertex) {
-      newHovered = intersects[0].object
+      const hit = intersects[0]
+      newHovered = hit.object
+      
+      // For batched meshes, look up face info from faceMap
+      if (isBatched && hit.faceIndex !== undefined) {
+        const faceMap = newHovered.userData.faceMap
+        if (faceMap) {
+          hoveredFaceInfo = faceMap.get(hit.faceIndex)
+        }
+      }
     }
     
     // Helper to apply selection highlight to a mesh
@@ -1200,7 +1253,18 @@ export function useThreeScene(containerRef, geometryData) {
       }
       
       // Apply new hover
-      if (newHovered?.userData.baseColor) {
+      if (isBatched && hoveredFaceInfo) {
+        // Batched mode - update store with hovered face info
+        // Visual highlighting is not supported in batched mode (would require vertex color updates)
+        hoveredFaceInfoRef.current = hoveredFaceInfo  // Store for click handler
+        if (currentSelectionMode === 'element') {
+          store.setHoveredElement(hoveredFaceInfo.panelId)
+        } else {
+          store.setHoveredFace(hoveredFaceInfo.faceId)
+        }
+      } else if (newHovered?.userData.baseColor) {
+        hoveredFaceInfoRef.current = null  // Clear batched info in individual mode
+        // Individual mesh mode - visual highlighting
         const newPanelId = newHovered.userData.panelId
         
         if (currentSelectionMode === 'element' && newPanelId !== undefined && newPanelId !== null) {
@@ -1235,15 +1299,16 @@ export function useThreeScene(containerRef, geometryData) {
             store.setHoveredFace(faceId)
           }
         }
-      } else if (hoveredMeshRef.current && !newHoveredVertex) {
+      } else if ((hoveredMeshRef.current || (isBatched && !newHovered)) && !newHoveredVertex) {
         // Clear hover in store when leaving mesh (and not on vertex)
+        hoveredFaceInfoRef.current = null
         store.clearHover()
       }
       
       hoveredMeshRef.current = newHovered
     }
     
-    renderer.domElement.style.cursor = (newHoveredVertex || newHovered) ? 'pointer' : ''
+    renderer.domElement.style.cursor = (newHoveredVertex || newHovered || hoveredFaceInfo) ? 'pointer' : ''
   }, [])
 
   const resetHover = useCallback(() => {
@@ -1319,11 +1384,32 @@ export function useThreeScene(containerRef, geometryData) {
     store.clearHover()
   }, [])
 
-  // Update geometry when data changes
-  useEffect(() => {
+  // ============================================
+  // Direct Scene Update Function
+  // ============================================
+  // This function is registered globally and called directly from the data source,
+  // bypassing React state/scheduling entirely for maximum performance.
+  const updateSceneGeometry = useCallback((geometryData) => {
     const geometryGroup = geometryGroupRef.current
     const labelGroup = labelGroupRef.current
     const vertexGroup = vertexGroupRef.current
+    
+    // Store ref for other functions that need it
+    geometryDataRef.current = geometryData
+    
+    // Get current settings from store (these don't change frequently)
+    const viewportState = useViewportStore.getState()
+    const currentViewMode = viewportState.viewMode
+    const currentColorMode = viewportState.colorMode
+    const currentShowFaceLabels = viewportState.showFaceLabels
+    const currentSelectionMode = viewportState.selectionMode
+    const currentVertexScale = viewportState.vertexScale
+    
+    // Log when this function runs relative to user action
+    const userActionStartTime = useAppStore.getState().userActionStartTime
+    if (userActionStartTime) {
+      console.log(`[TIMER] updateSceneGeometry DIRECT at: ${(performance.now() - userActionStartTime).toFixed(2)}ms from user action`)
+    }
     
     if (!geometryGroup) return
     
@@ -1341,27 +1427,45 @@ export function useThreeScene(containerRef, geometryData) {
     // Time Three.js mesh creation
     const t0 = performance.now()
     
-    // Create meshes
-    geometryData.panels.forEach((panel) => {
-      const mesh = createPolygonMesh(panel, viewMode, colorMode)
-      if (mesh) {
-        geometryGroup.add(mesh)
+    // Use batched rendering for large scenes (much faster GPU upload)
+    const useBatched = geometryData.panels.length > 50
+    
+    if (useBatched) {
+      // Single merged mesh - 1 draw call instead of thousands
+      const batched = createBatchedMeshes(geometryData, currentViewMode, currentColorMode)
+      if (batched) {
+        geometryGroup.add(batched.fillMesh)
+        geometryGroup.add(batched.edgeMesh)
+        // Store faceMap on group for raycasting
+        geometryGroup.userData.faceMap = batched.faceMap
+        geometryGroup.userData.isBatched = true
       }
-    })
+    } else {
+      // Individual meshes for small scenes (needed for selection highlighting)
+      geometryData.panels.forEach((panel) => {
+        const mesh = createPolygonMesh(panel, currentViewMode, currentColorMode)
+        if (mesh) {
+          geometryGroup.add(mesh)
+        }
+      })
+      geometryGroup.userData.isBatched = false
+    }
     
     const meshTime = performance.now() - t0
     
     // Create labels
     const t1 = performance.now()
-    if (showFaceLabels) {
+    if (currentShowFaceLabels) {
       createLabels(geometryData, labelGroup)
     }
     const labelTime = performance.now() - t1
     
-    // Create vertices (always create for selection, visible only in point mode)
+    // Create vertices ONLY when in point selection mode (lazy creation for performance)
     const t2 = performance.now()
-    const showVerts = selectionMode === 'point'
-    createVertexMarkers(geometryData, vertexGroup, showVerts, vertexScale)
+    const showVerts = currentSelectionMode === 'point'
+    if (showVerts) {
+      createVertexMarkers(geometryData, vertexGroup, true, currentVertexScale)
+    }
     const vertexTime = performance.now() - t2
     
     const totalTime = performance.now() - t0
@@ -1375,6 +1479,31 @@ export function useThreeScene(containerRef, geometryData) {
       panelCount: geometryData.panels.length,
     })
     
+    // Complete the true end-to-end timer (started in renderGXML)
+    const renderStartTime = useAppStore.getState().renderStartTime
+    if (renderStartTime) {
+      const trueEndToEnd = performance.now() - renderStartTime
+      useAppStore.getState().setTrueEndToEnd(trueEndToEnd)
+      useAppStore.getState().setRenderStartTime(null) // Clear for next render
+    }
+    
+    // Complete the user action timer AFTER the next frame is actually rendered
+    // This captures GPU upload time and first frame render
+    if (userActionStartTime) {
+      console.log(`[TIMER] Meshes built, scheduling rAF at: ${performance.now().toFixed(2)} (elapsed so far: ${(performance.now() - userActionStartTime).toFixed(2)}ms)`)
+      // Wait for next frame to be rendered, then measure
+      requestAnimationFrame(() => {
+        console.log(`[TIMER] First rAF at: ${performance.now().toFixed(2)} (elapsed: ${(performance.now() - userActionStartTime).toFixed(2)}ms)`)
+        requestAnimationFrame(() => {
+          // Two rAF calls ensures the previous frame was actually painted
+          const userActionEndToEnd = performance.now() - userActionStartTime
+          console.log(`[TIMER] Second rAF - FINAL: ${userActionEndToEnd.toFixed(2)}ms`)
+          useAppStore.getState().setUserActionEndToEnd(userActionEndToEnd)
+          useAppStore.getState().setUserActionStartTime(null) // Clear for next action
+        })
+      })
+    }
+    
     // Log to console
     console.group('🎨 Three.js Scene Build')
     console.log(`   Meshes:         ${meshTime.toFixed(2)} ms (${geometryData.panels.length} panels)`)
@@ -1382,8 +1511,30 @@ export function useThreeScene(containerRef, geometryData) {
     console.log(`   Vertices:       ${vertexTime.toFixed(2)} ms`)
     console.log(`   Total Three.js: ${totalTime.toFixed(2)} ms`)
     console.groupEnd()
+  }, [])
+  
+  // Register the scene update function globally
+  useEffect(() => {
+    registerSceneUpdate(updateSceneGeometry)
     
-  }, [geometryData, viewMode, colorMode, showFaceLabels, selectionMode, vertexScale])
+    // If there's already geometry data in the store, render it immediately
+    const existingData = useAppStore.getState().geometryData
+    if (existingData) {
+      updateSceneGeometry(existingData)
+    }
+    
+    return () => {
+      // Unregistration is handled in main cleanup
+    }
+  }, [updateSceneGeometry])
+  
+  // Rebuild scene when view settings change (not data-driven, uses ref)
+  useEffect(() => {
+    const geometryData = geometryDataRef.current
+    if (geometryData) {
+      updateSceneGeometry(geometryData)
+    }
+  }, [viewMode, colorMode, showFaceLabels, selectionMode, vertexScale, updateSceneGeometry])
 
   // Handle selection highlighting from spreadsheet
   useEffect(() => {

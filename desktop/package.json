@@ -9,7 +9,7 @@
     "build": "npm run build:frontend && electron-builder",
     "build:mac": "npm run build:frontend && electron-builder --mac",
     "build:win": "npm run build:frontend && electron-builder --win",
-    "build:frontend": "cd ../gxml-web/frontend && npm run build && cp -r dist ../../gxml-desktop/frontend-dist",
+    "build:frontend": "cd ../frontend && npm run build && xcopy /E /I /Y dist ..\\desktop\\frontend-dist",
     "postinstall": "electron-builder install-app-deps"
   },
   "build": {
@@ -22,12 +22,12 @@
     "files": [
       "electron/**/*",
       "frontend-dist/**/*",
-      "!node_modules/**/*"
+      "python/**/*"
     ],
     "extraResources": [
       {
-        "from": "python-env",
-        "to": "python-env",
+        "from": "python",
+        "to": "python",
         "filter": ["**/*"]
       }
     ],
@@ -49,7 +49,5 @@
     "electron": "^28.1.0",
     "electron-builder": "^24.9.1"
   },
-  "dependencies": {
-    "tree-kill": "^1.2.2"
-  }
+  "dependencies": {}
 }

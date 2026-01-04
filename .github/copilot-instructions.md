@@ -1,6 +1,59 @@
 # GXML-Web Copilot Instructions
 
-## Dev Server Management
+## ⚠️ CRITICAL: Use Dev Mode During Development
+
+**NEVER rebuild the Electron app for every code change!** Use dev mode instead:
+
+### Starting Development Environment (Windows)
+
+```powershell
+# RECOMMENDED: Use the dev script (handles everything)
+cd e:\Development\LocalProjects\gxml\gxml-web\desktop
+.\dev.ps1
+```
+
+The dev script automatically:
+1. Kills any existing GXML and Vite processes on ports 5173/5174
+2. Starts the Vite dev server for frontend hot reload
+3. Waits for Vite to be ready
+4. Starts Electron in dev mode pointing to the correct Vite port
+
+### What Dev Mode Provides:
+- **Frontend hot reload**: Edit React/JS/CSS files → changes appear instantly (Vite HMR)
+- **Python live changes**: The Python server uses source files directly (restart Electron for Python changes)
+- **DevTools open**: Electron opens with DevTools for debugging
+- **C Extension available**: Uses the dev machine's compiled C extension
+
+### Checking Changes
+- **Frontend (JS/JSX/CSS)**: Save file → changes appear instantly via hot reload
+- **Python (gxml, gxml_server.py)**: Restart Electron (Ctrl+C, run `.\dev.ps1` again)
+- **Electron main process**: Restart Electron
+
+### When to Rebuild (Production Build)
+Only rebuild the Electron app when:
+- Testing the production build specifically
+- Creating a release
+- Testing bundled Python environment
+
+```powershell
+# Production build (ONLY when needed)
+cd e:\Development\LocalProjects\gxml\gxml-web\desktop
+npx electron-builder --win
+```
+
+### Troubleshooting Dev Mode
+If dev mode isn't working:
+```powershell
+# Manually kill all related processes
+Get-Process -Name "GXML","node" -ErrorAction SilentlyContinue | Stop-Process -Force
+
+# Then run dev script again
+.\dev.ps1
+```
+
+---
+
+## Dev Server Management (macOS/Linux)
 
 To start or restart the dev servers, run:
 ```bash

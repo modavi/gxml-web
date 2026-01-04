@@ -36,6 +36,13 @@ env/
 node_modules/
 dist/
 
+# Desktop app build artifacts
+desktop/frontend-dist/
+desktop/python/
+
 # OS
 .DS_Store
 Thumbs.db
+
+# Temp files
+temp/

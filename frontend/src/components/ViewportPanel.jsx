@@ -27,9 +27,11 @@ function ViewportPanel() {
     selectedElementId,
   } = useViewportStore()
   
+  // geometryData is now used only for non-Three.js consumers (selection check)
   const geometryData = useAppStore((state) => state.geometryData)
   
-  const { resetView, cameraRef, controlsRef } = useThreeScene(containerRef, geometryData)
+  // useThreeScene no longer needs geometryData - it receives it directly via sceneRegistry
+  const { resetView, cameraRef, controlsRef } = useThreeScene(containerRef)
   
   // Check if we have a valid selected panel with endpoint
   const hasValidSelection = geometryData?.panels?.[selectedElementId]?.endPoint != null

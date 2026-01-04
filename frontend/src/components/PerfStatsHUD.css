@@ -53,6 +53,20 @@
   color: #999;
 }
 
+.perf-row-nested {
+  padding-left: 24px;
+}
+
+.perf-row-nested .perf-label {
+  color: #777;
+  font-style: italic;
+}
+
+.perf-row-nested .perf-label::before {
+  content: '└ ';
+  color: #555;
+}
+
 .perf-row-highlight {
   background: rgba(255, 200, 0, 0.1);
   margin: 0 -4px;

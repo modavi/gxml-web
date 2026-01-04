@@ -174,6 +174,9 @@ function EditorPanel() {
     setXmlContent(value || '')
     
     if (isAutoUpdate) {
+      // Start user action timer when user types (before debounce)
+      useAppStore.getState().setUserActionStartTime(performance.now())
+      
       if (timeoutRef.current) {
         clearTimeout(timeoutRef.current)
       }
@@ -199,6 +202,11 @@ function EditorPanel() {
     }
   }
 
+  const handleRefresh = useCallback(() => {
+    useAppStore.getState().setUserActionStartTime(performance.now())
+    renderGXML()
+  }, [renderGXML])
+
   return (
     <div className="editor-panel">
       <div className="panel-header">
@@ -212,7 +220,7 @@ function EditorPanel() {
             />
             Auto-update
           </label>
-          <button className="render-btn" onClick={renderGXML} title="Render (Ctrl+Enter)">
+          <button className="render-btn" onClick={handleRefresh} title="Render (Ctrl+Enter)">
             <IconRefresh /> Refresh
           </button>
         </div>
