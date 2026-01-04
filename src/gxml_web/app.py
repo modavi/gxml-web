@@ -19,7 +19,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 # Import GXML components from submodule
-from gxml_engine import run as gxml_run, format_timings_for_web
+from gxml_engine import run as gxml_run
+
+# Import local utilities
+from gxml_web.timing_utils import format_timings_for_web
 
 # Import XSD parser
 from gxml_web.xsd_parser import parse_xsd_schema
@@ -77,7 +80,6 @@ async def render_gxml(request: GXMLRequest) -> Response:
         result = gxml_run(
             request.xml,
             backend='c',  # Use C extension for best performance
-            output_format='binary',
             profile=True,
         )
         
