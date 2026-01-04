@@ -1,17 +1,16 @@
 """FastAPI backend for GXML Web Viewer."""
 
-import json
 import sys
 import time
-import xml.etree.ElementTree as ET
 from pathlib import Path
-from typing import Any
 
-# Add gxml src directory to path for imports
-# This is needed because gxml uses local imports, not package imports
-GXML_SRC_PATH = Path(__file__).parent.parent.parent.parent / "gxml" / "src" / "gxml"
-if str(GXML_SRC_PATH) not in sys.path:
-    sys.path.insert(0, str(GXML_SRC_PATH))
+# Add gxml submodule to path
+GXML_SRC = Path(__file__).parent.parent.parent / "gxml" / "src"
+GXML_PKG = GXML_SRC / "gxml"
+
+for p in [GXML_SRC, GXML_PKG]:
+    if str(p) not in sys.path:
+        sys.path.insert(0, str(p))
 
 from fastapi import FastAPI, HTTPException
 from fastapi.staticfiles import StaticFiles
@@ -19,14 +18,11 @@ from fastapi.responses import FileResponse, Response
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
-# Import GXML components (now uses local imports from gxml src)
-from gxml_parser import GXMLParser
-from gxml_layout import GXMLLayout
-from gxml_render import GXMLRender
+# Import GXML components from submodule
+from gxml_engine import run as gxml_run, format_timings_for_web
 
-# Import our render engines
-from gxml_web.json_render_engine import JSONRenderEngine
-from gxml_web.binary_render_engine import BinaryRenderEngine
+# Import XSD parser
+from gxml_web.xsd_parser import parse_xsd_schema
 
 app = FastAPI(title="GXML Web Viewer")
 
@@ -39,136 +35,13 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Get the static files directories
-STATIC_DIR = Path(__file__).parent / "static"
-REACT_DIST_DIR = STATIC_DIR / "dist"
-
-# Path to XSD schema
-XSD_PATH = Path(__file__).parent.parent.parent.parent / "gxml" / "misc" / "gxml.xsd"
-
-# Check if React build exists (production mode)
-USE_REACT_BUILD = REACT_DIST_DIR.exists() and (REACT_DIST_DIR / "index.html").exists()
+# Get the React build directory
+REACT_DIST_DIR = Path(__file__).parent / "static" / "dist"
 
 
 class GXMLRequest(BaseModel):
     """Request model for GXML rendering."""
     xml: str
-
-
-class GXMLResponse(BaseModel):
-    """Response model for GXML rendering."""
-    success: bool
-    data: dict[str, Any] | None = None
-    error: str | None = None
-
-
-def parse_xsd_schema() -> dict:
-    """Parse XSD schema and return a JSON-friendly structure for autocomplete."""
-    tree = ET.parse(XSD_PATH)
-    root = tree.getroot()
-    
-    # XSD namespace
-    ns = {'xs': 'http://www.w3.org/2001/XMLSchema'}
-    
-    schema = {'tags': {}}
-    
-    # Parse simple types (enums)
-    simple_types = {}
-    for simple_type in root.findall('.//xs:simpleType', ns):
-        type_name = simple_type.get('name')
-        if type_name:
-            restriction = simple_type.find('xs:restriction', ns)
-            if restriction is not None:
-                values = [enum.get('value') for enum in restriction.findall('xs:enumeration', ns)]
-                if values:
-                    simple_types[type_name] = values
-    
-    # Parse complex types
-    complex_types = {}
-    for complex_type in root.findall('.//xs:complexType', ns):
-        type_name = complex_type.get('name')
-        if type_name:
-            complex_types[type_name] = parse_complex_type(complex_type, ns, simple_types)
-    
-    # Parse root element
-    for element in root.findall('xs:element', ns):
-        elem_name = element.get('name')
-        if elem_name:
-            complex_type = element.find('xs:complexType', ns)
-            if complex_type is not None:
-                schema['tags'][elem_name] = parse_complex_type(complex_type, ns, simple_types)
-                # Get children from sequence
-                sequence = complex_type.find('.//xs:sequence', ns)
-                if sequence is not None:
-                    children = []
-                    for child in sequence.findall('xs:element', ns):
-                        child_name = child.get('name')
-                        child_type = child.get('type')
-                        if child_name:
-                            children.append(child_name)
-                            # If it has a type reference, use that
-                            if child_type and child_type in complex_types:
-                                schema['tags'][child_name] = complex_types[child_type].copy()
-                    schema['tags'][elem_name]['children'] = children
-    
-    # Add vars tag (special case - allows any children)
-    if 'vars' not in schema['tags']:
-        schema['tags']['vars'] = {
-            'description': 'Container for variable definitions.',
-            'attributes': {},
-            'children': ['*']
-        }
-    
-    return schema
-
-
-def parse_complex_type(complex_type, ns, simple_types) -> dict:
-    """Parse a complex type definition into a dict."""
-    result = {
-        'description': '',
-        'attributes': {},
-        'children': []
-    }
-    
-    # Get documentation
-    doc = complex_type.find('.//xs:documentation', ns)
-    if doc is not None and doc.text:
-        result['description'] = doc.text.strip()
-    
-    # Get attributes
-    for attr in complex_type.findall('.//xs:attribute', ns):
-        attr_name = attr.get('name')
-        attr_type = attr.get('type')
-        if attr_name:
-            attr_def = {'type': 'string'}
-            
-            # Get attribute documentation
-            attr_doc = attr.find('.//xs:documentation', ns)
-            if attr_doc is not None and attr_doc.text:
-                attr_def['description'] = attr_doc.text.strip()
-            
-            # Check if type is a known simple type with enum values
-            if attr_type:
-                # Remove xs: prefix if present
-                type_name = attr_type.replace('xs:', '')
-                if type_name in simple_types:
-                    attr_def['type'] = 'enum'
-                    attr_def['values'] = simple_types[type_name]
-                elif type_name == 'boolean':
-                    attr_def['type'] = 'boolean'
-                    attr_def['values'] = ['true', 'false']
-            
-            result['attributes'][attr_name] = attr_def
-    
-    # Get child elements from sequence
-    sequence = complex_type.find('.//xs:sequence', ns)
-    if sequence is not None:
-        for child in sequence.findall('xs:element', ns):
-            child_name = child.get('name')
-            if child_name:
-                result['children'].append(child_name)
-    
-    return result
 
 
 @app.get("/health")
@@ -188,92 +61,50 @@ async def get_schema():
         raise HTTPException(status_code=500, detail=f"Failed to parse XSD: {str(e)}")
 
 
-@app.post("/api/render", response_model=GXMLResponse)
-async def render_gxml(request: GXMLRequest) -> GXMLResponse:
-    """Render GXML and return geometry data as JSON."""
-    try:
-        # Parse the GXML
-        root_element = GXMLParser.parse(request.xml)
-        
-        # Apply layout
-        GXMLLayout.layout(root_element)
-        
-        # Create JSON render engine and render
-        render_engine = JSONRenderEngine()
-        GXMLRender.render(root_element, render_engine)
-        
-        # Get the result as dict
-        result = render_engine.to_dict()
-        
-        return GXMLResponse(success=True, data=result)
-    
-    except Exception as e:
-        # For XML parse errors, extract just the message
-        error_msg = str(e)
-        if 'ParseError' in type(e).__name__ or 'xml.etree' in str(type(e)):
-            # Clean up XML parse errors
-            error_msg = f"XML Parse Error: {error_msg}"
-        return GXMLResponse(success=False, error=error_msg)
-
-
-@app.post("/api/render/binary")
-async def render_gxml_binary(request: GXMLRequest) -> Response:
+@app.post("/api/render")
+async def render_gxml(request: GXMLRequest) -> Response:
     """Render GXML and return geometry as packed binary data.
     
     Returns binary data that can be loaded directly into WebGL Float32Arrays.
     See binary_render_engine.py for format documentation.
+    
+    Uses gxml_engine profiling to capture timing from instrumented code sections.
     """
     try:
-        timings = {}
         t0 = time.perf_counter()
         
-        # Parse the GXML
-        t_start = time.perf_counter()
-        root_element = GXMLParser.parse(request.xml)
-        timings['parse'] = (time.perf_counter() - t_start) * 1000
+        # Run the full pipeline with profiling enabled
+        result = gxml_run(
+            request.xml,
+            backend='c',  # Use C extension for best performance
+            output_format='binary',
+            profile=True,
+        )
         
-        # Apply layout with granular timing
-        t_start = time.perf_counter()
-        GXMLLayout.measure_pass(root_element)
-        timings['measure'] = (time.perf_counter() - t_start) * 1000
+        # result.output is already bytes for binary format
+        binary_data = result.output
         
-        t_start = time.perf_counter()
-        GXMLLayout.pre_layout_pass(root_element)
-        timings['prelayout'] = (time.perf_counter() - t_start) * 1000
-        
-        t_start = time.perf_counter()
-        GXMLLayout.layout_pass(root_element)
-        timings['layout'] = (time.perf_counter() - t_start) * 1000
-        
-        t_start = time.perf_counter()
-        GXMLLayout.post_layout_pass(root_element)
-        timings['postlayout'] = (time.perf_counter() - t_start) * 1000
-        
-        # Create binary render engine and render
-        t_start = time.perf_counter()
-        render_engine = BinaryRenderEngine()
-        GXMLRender.render(root_element, render_engine)
-        timings['render'] = (time.perf_counter() - t_start) * 1000
-        
-        # Get binary data
-        t_start = time.perf_counter()
-        binary_data = render_engine.to_bytes()
-        timings['serialize'] = (time.perf_counter() - t_start) * 1000
-        
+        # Use shared timing extraction helper
+        timings = format_timings_for_web(result.timings)
         timings['total'] = (time.perf_counter() - t0) * 1000
+        
+        # Get panel count from stats
+        panel_count = result.stats.get('panel_count', 0) if result.stats else 0
         
         return Response(
             content=binary_data,
             media_type="application/octet-stream",
             headers={
-                "X-Panel-Count": str(len(render_engine.panels)),
+                "X-Panel-Count": str(panel_count),
                 "X-Timing-Parse": f"{timings['parse']:.2f}",
                 "X-Timing-Measure": f"{timings['measure']:.2f}",
                 "X-Timing-Prelayout": f"{timings['prelayout']:.2f}",
                 "X-Timing-Layout": f"{timings['layout']:.2f}",
                 "X-Timing-Postlayout": f"{timings['postlayout']:.2f}",
                 "X-Timing-Render": f"{timings['render']:.2f}",
-                "X-Timing-Serialize": f"{timings['serialize']:.2f}",
+                "X-Timing-Intersection": f"{timings['intersection']:.2f}",
+                "X-Timing-Face": f"{timings['face']:.2f}",
+                "X-Timing-Geometry": f"{timings['geometry']:.2f}",
                 "X-Timing-Total": f"{timings['total']:.2f}",
             }
         )
@@ -288,19 +119,16 @@ async def render_gxml_binary(request: GXMLRequest) -> Response:
 
 @app.get("/")
 async def root():
-    """Serve the main HTML page."""
-    if USE_REACT_BUILD:
-        return FileResponse(REACT_DIST_DIR / "index.html")
-    return FileResponse(STATIC_DIR / "index.html")
+    """Serve the React app."""
+    index_path = REACT_DIST_DIR / "index.html"
+    if not index_path.exists():
+        raise HTTPException(status_code=500, detail="React build not found. Run 'npm run build' in frontend/")
+    return FileResponse(index_path)
 
 
-# Mount static files
-if USE_REACT_BUILD:
-    # Serve React build assets
+# Mount React build assets
+if REACT_DIST_DIR.exists() and (REACT_DIST_DIR / "assets").exists():
     app.mount("/assets", StaticFiles(directory=REACT_DIST_DIR / "assets"), name="assets")
-else:
-    # Serve legacy static files
-    app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
 
 
 if __name__ == "__main__":

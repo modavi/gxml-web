@@ -1,0 +1,3 @@
+[submodule "gxml"]
+	path = gxml
+	url = https://github.com/modavi/gxml.git
