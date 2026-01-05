@@ -3,7 +3,7 @@
 from typing import Any, Dict, Optional
 
 
-def format_timings_for_web(profile_results: Optional[Dict[str, Any]]) -> Dict[str, float]:
+def format_timings_for_web(profile_results: Optional[Dict[str, Any]]) -> Dict[str, Any]:
     """
     Format GXML profile results into web-friendly timing dict.
     
@@ -14,10 +14,9 @@ def format_timings_for_web(profile_results: Optional[Dict[str, Any]]) -> Dict[st
         profile_results: Raw timing dict from gxml_engine result.timings
         
     Returns:
-        Dict with web-friendly timing names and values in milliseconds:
-        - parse, measure, prelayout, layout, postlayout, render
-        - intersection, face, geometry (solver breakdown)
-        - fastmesh, serialize (indexed pipeline)
+        Dict with:
+        - Legacy flattened keys for backward compatibility
+        - 'markers': Raw marker data with parent info for hierarchical display
     """
     if not profile_results:
         return {}
@@ -25,7 +24,8 @@ def format_timings_for_web(profile_results: Optional[Dict[str, Any]]) -> Dict[st
     def ms(name: str) -> float:
         return profile_results.get(name, {}).get('total_ms', 0.0)
     
-    return {
+    # Legacy flat format for backward compatibility
+    result = {
         'parse': ms('parse'),
         'measure': ms('measure_pass'),
         'prelayout': ms('pre_layout_pass'),
@@ -40,3 +40,9 @@ def format_timings_for_web(profile_results: Optional[Dict[str, Any]]) -> Dict[st
         'fastmesh': ms('fast_mesh_builder'),
         'serialize': ms('serialize'),
     }
+    
+    # Include raw markers for hierarchical display
+    # Each marker has: total_ms, count, avg_ms, min_ms, max_ms, parents
+    result['markers'] = profile_results
+    
+    return result
